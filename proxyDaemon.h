@@ -12,28 +12,37 @@
 #include <string>
 #include <pthread.h>
 using namespace std;
-//struct _reqline{
-//    string method
-//};
-//typedef _reqline reqline;
+struct _reqline{
+       string method;
+       string URI;
+       string version;
+};
+typedef _reqline reqline;
+
+struct _reqheader{
+    string name;
+    string value;
+};
+typedef _reqheader reqheader;
+
 class proxyDaemon {
 private:
     // make a inner class for request line
-    class reqline{
-    private:
-        string method;
-        string URI;
-        string version;
-    public:
-        reqline():method(),URI(),version(){}
-    };
-    class reqheader{
-    private:
-        string name;
-        string value;
-    public:
-        reqheader():name(),value(){}
-    };
+//    class reqline{
+//    private:
+//        string method;
+//        string URI;
+//        string version;
+//    public:
+//        reqline():method(),URI(),version(){}
+//    };
+//    class reqheader{
+//    private:
+//        string name;
+//        string value;
+//    public:
+//        reqheader():name(),value(){}
+//    };
     reqline myreqline;
     reqheader myreqheader;
     //http message from client
@@ -41,8 +50,8 @@ private:
 public:
     static void createThread(int sock_fd);
     static void* acceptReq(void *sock_fd); // accept HTTP request from cline
-//    parseReq(); // parse HTTP request into method, URL and context
-//    conToServer(); // connect to required server
+    void parseReq(); // parse HTTP request into method, URL and context
+    void conToServer(); // connect to required server
 //    createThread(); // create a thread
 //    readCache(); // read from cache
 //    writeCache(); // write to cache
