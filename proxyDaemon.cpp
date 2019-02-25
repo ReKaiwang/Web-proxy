@@ -4,6 +4,9 @@
 
 #include "proxyDaemon.h"
 #include <iostream>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <map>
 #include <string>
 #include <string.h>
@@ -12,6 +15,8 @@
 #include <netdb.h>
 #include <pthread.h>
 using namespace std;
+//a heap lock
+pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
 //implementation of proxyDaemon class
 void proxyDaemon::createThread(int sock_fd) {
     pthread_t thread;
@@ -46,6 +51,7 @@ void* proxyDaemon::acceptReq(void *sock_fd) {
     pd.parseReq();
     pd.conToServer();
     pd.responReq(*(int*) sock_fd);
+    close(*(int*) sock_fd);
     return NULL;
 }
 void proxyDaemon::recvGET(int sock_fd) {
@@ -65,6 +71,7 @@ void proxyDaemon::recvGET(int sock_fd) {
             memset(tempbuff, 0, sizeof(tempbuff));
         }
     }
+    //cout << client_buff.find("\r\n\r\n");
     cout << client_buff;
 }
 void proxyDaemon::parseReq() {
@@ -136,6 +143,7 @@ void proxyDaemon::conToServer() {
     host_info.ai_socktype = SOCK_STREAM;
     cout<<myreqheader["Host"]<<endl;
     //get the host address information
+    pthread_rwlock_wrlock(& heaplock);
     status = getaddrinfo(myreqheader["Host"].c_str(),"80", & host_info, &host_info_list);
     if (status != 0) {
         perror("Error: cannot get server address\n");
@@ -150,6 +158,7 @@ void proxyDaemon::conToServer() {
     }
     //connect with server
     status = connect(sock_fd, host_info_list->ai_addr,host_info_list->ai_addrlen);
+    pthread_rwlock_unlock(& heaplock);
     if(status == -1){
         cerr << "fail to connect with server" << endl;
         exit(EXIT_FAILURE);
@@ -168,7 +177,7 @@ void proxyDaemon::conToServer() {
 //        }
     //receive content from server
     long block_size = 0;
-    //first get the response header
+    //first get the status line and response header
     while(1) {
         char tempbuff[256];
         status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
@@ -181,39 +190,44 @@ void proxyDaemon::conToServer() {
                 break;
             server_buff.append(tempbuff,status);
             block_size += status;
-            //cout << block_size <<endl;
-            //cout << tempbuff;
-            if(server_buff.find("r\n\r\n") != string::npos)
+            //what is wrong here?
+            if(server_buff.find("\r\n\r\n") != string::npos)
                      break;
             memset(tempbuff, 0, sizeof(tempbuff));
         }
     }
-    cout << server_buff.find("r\n\r\n")<<endl;
-//    size_t findheader;
-//    int header_length=0;
-//    if((findheader = server_buff.find("Content-Length")) != string::npos){
-//        //findheader = atoi(server_buff.substr(findheader+16, ))
-//        string tempstr = server_buff.substr(findheader+16);
-//        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
-//    }
-//    cout << header_length;
-//    while(1){
-//        char tempbuff[256];
-//        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
-//        if (status == -1) {
-//            cerr << "fail to receive message from server" << endl;
-//            exit(EXIT_FAILURE);
-//        }
-//        else{
-//            server_buff.append(tempbuff,status);
-//            block_size += status;
-//            if(block_size >= header_length)
-//                break;
-//            memset(tempbuff, 0, sizeof(tempbuff));
-//        }
-//    }
-//    else if((findheader = server_buff.find("Content-Length")) != string::npos)
-   // cout <<server_buff;
+    //cout << server_buff.find("\r\n\r\n")<<endl;
+
+    size_t findheader;
+    int header_length=0;
+    if((findheader = server_buff.find("Content-Length")) != string::npos){
+        //findheader = atoi(server_buff.substr(findheader+16, ))
+        string tempstr = server_buff.substr(findheader+16);
+        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
+    }
+    cout << header_length<<endl;
+    cout << block_size;
+    while(1){
+        char tempbuff[256];
+        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+        if (status == -1) {
+            cerr << "fail to receive message from server" << endl;
+            exit(EXIT_FAILURE);
+        }
+        else{
+            if(status == 0)
+                break;
+            server_buff.append(tempbuff,status);
+            block_size += status;
+            if(block_size >= header_length)
+                break;
+            memset(tempbuff, 0, sizeof(tempbuff));
+        }
+    }
+
+    //deal with chunked data
+    //else if((findheader = server_buff.find("Content-Length")) != string::npos)
+    //cout <<server_buff;
     //server_buff.append(buff);
 }
 void proxyDaemon::responReq(int sock_fd) {
