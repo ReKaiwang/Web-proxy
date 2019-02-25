@@ -19,11 +19,11 @@ struct _reqline{
 };
 typedef _reqline reqline;
 
-struct _reqheader{
+/*struct _reqheader{
     string name;
     string value;
 };
-typedef _reqheader reqheader;
+typedef _reqheader reqheader;*/
 
 class proxyDaemon {
 private:
@@ -44,14 +44,17 @@ private:
 //        reqheader():name(),value(){}
 //    };
     reqline myreqline;
-    reqheader myreqheader;
+   // reqheader myreqheader;
+    map<string,string> myreqheader;
     //http message from client
     string client_buff;
+    string server_buff;
 public:
     static void createThread(int sock_fd);
     static void* acceptReq(void *sock_fd); // accept HTTP request from cline
     void parseReq(); // parse HTTP request into method, URL and context
     void conToServer(); // connect to required server
+    void responReq(int sock_fd);
 //    createThread(); // create a thread
 //    readCache(); // read from cache
 //    writeCache(); // write to cache
@@ -59,7 +62,12 @@ public:
 //    responReq(); // response to client
 private:
     //transform the http from client to server
-    string stickytogether();
+    //string stickytogether();
+    void recvGET(int sock_fd);
+    void recvPOST(int sock_fd);
+    void parsereqline(string& reqline);
+    void parsereqhead(string& reqhead);
+    void parsereqheadhelp(string& perline);
 };
 
 class proxymanager{

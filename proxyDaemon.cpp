@@ -6,6 +6,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netdb.h>
@@ -23,59 +24,107 @@ void* proxyDaemon::acceptReq(void *sock_fd) {
     //thread detach
     //...
     //receive http from client
-    int count = 0;
+    //verify method
+    char method[4];
+    status = recv(*(int *) sock_fd, method, sizeof(method)- sizeof(char), 0);
+    if (status == -1) {
+        cerr << "fail to get message from client" << endl;
+        exit(EXIT_FAILURE);
+    }
+    method[3] = '\0';
+    //if GET
+    if(strcmp(method,"GET") == 0){
+        pd.recvGET(*(int *) sock_fd);
+    }
+    //if POST
+//    else if(strcmp(method,"POS")==0){
+//        pd.recvPOST(*(int *) sock_fd);
+//    }
+
+    //cout << pd.client_buff;
+    //parse the http message
+    pd.parseReq();
+    pd.conToServer();
+    pd.responReq(*(int*) sock_fd);
+    return NULL;
+}
+void proxyDaemon::recvGET(int sock_fd) {
+    client_buff.append("GET");
+    int status;
     while(1) {
-        char tempbuff;
-        status = recv(*(int *) sock_fd, &tempbuff, sizeof(tempbuff), 0);
+        char tempbuff[256];
+        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
         if (status == -1) {
             cerr << "fail to get message from client" << endl;
             exit(EXIT_FAILURE);
         }
-        else if(tempbuff == '\r') {
-            if(count == 1 )
-                break;
-            else
-                count = 1;
-        }
         else {
-            count =0;
-            pd.client_buff.push_back(tempbuff);
-            memset(&tempbuff, 0, sizeof(tempbuff));
+            client_buff.append(tempbuff);
+            if(client_buff.find("\r\n\r\n") != string::npos)
+                break;
+            memset(tempbuff, 0, sizeof(tempbuff));
         }
     }
-    cout << pd.client_buff;
-    //parse the http message
-    pd.parseReq();
-    pd.conToServer();
-    return NULL;
+    cout << client_buff;
 }
 void proxyDaemon::parseReq() {
     //parse the request line
-    string temphttp(client_buff);
-    int spacepos = temphttp.find(' ');
-    int prepos;
-    myreqline.method = temphttp.substr(0,spacepos);
-    temphttp.erase(spacepos, 1);
-    prepos = spacepos;
-    spacepos = temphttp.find(' ');
-    myreqline.URI = temphttp.substr(prepos,spacepos-prepos);
-    temphttp.erase(spacepos, 1);
-    prepos = spacepos;
-    spacepos = temphttp.find('\n');
-    myreqline.version= temphttp.substr(prepos,spacepos-prepos);
-    temphttp.erase(spacepos, 1);
-
+//    int spacepos = temphttp.find(' ');
+//    int prepos;
+//    myreqline.method = temphttp.substr(0,spacepos);
+//    temphttp.erase(spacepos, 1);
+//    prepos = spacepos;
+//    spacepos = temphttp.find(' ');
+//    myreqline.URI = temphttp.substr(prepos,spacepos-prepos);
+//    temphttp.erase(spacepos, 1);
+//    prepos = spacepos;
+//    spacepos = temphttp.find("\r\n");
+//    myreqline.version= temphttp.substr(prepos,spacepos-prepos);
+//    temphttp.erase(spacepos, 1);
+    string temp = client_buff;
+    //cout<< client_buff;
+    int sepepoint = temp.find("\r\n");
+    if(sepepoint == string::npos){
+        cerr<<"can't find request line";
+        //exit(EXIT_FAILURE);
+    }
+    string firstline = temp.substr(0,sepepoint);
+    parsereqline(firstline);
+    temp.erase(sepepoint,2);
     //parse the request header
-    //remember that the request header may have multiple lines!!--which I havn't implemented
-    prepos = spacepos;
-    spacepos = temphttp.find(' ');
-    myreqheader.name= temphttp.substr(prepos,spacepos-prepos);
-    temphttp.erase(spacepos, 1);
-    prepos = spacepos;
-    spacepos = temphttp.find('\n');
-    myreqheader.value= temphttp.substr(prepos,spacepos-prepos);
-    //temphttp.erase(spacepos, 1);
+//    //remember that the request header may have multiple lines!!--which I havn't implemented
+//    prepos = spacepos;
+//    spacepos = temphttp.find(' ');
+//    myreqheader.name= temphttp.substr(prepos,spacepos-prepos);
+//    temphttp.erase(spacepos, 1);
+//    prepos = spacepos;
+//    spacepos = temphttp.find("\r\n");
+//    myreqheader.value= temphttp.substr(prepos,spacepos-prepos);
+//    //temphttp.erase(spacepos, 1);
+    string header = temp.substr(sepepoint,temp.find("\r\n\r\n")-sepepoint);
+    parsereqhead(header);
 
+}
+void proxyDaemon::parsereqline(string& reqline) {
+    int spacepos = reqline.find(' ');
+    int prepos;
+    myreqline.method = reqline.substr(0,spacepos);
+    reqline.erase(spacepos, 1);
+    prepos = spacepos;
+    spacepos = reqline.find(' ');
+    myreqline.URI = reqline.substr(prepos,spacepos-prepos);
+    reqline.erase(spacepos, 1);
+    myreqline.version = reqline.substr(spacepos);
+}
+void proxyDaemon::parsereqhead(string &reqhead) {
+   //cout << reqhead;
+    int hostpoint = reqhead.find("Host");
+    if(hostpoint == string::npos){
+        cerr<<"can't find the host"<<endl;
+        exit(EXIT_FAILURE);
+    }
+    string tempsubstr = reqhead.substr(hostpoint);
+    myreqheader["Host"] = tempsubstr.substr(hostpoint+6, tempsubstr.find("\r\n")-hostpoint-6);
 }
 void proxyDaemon::conToServer() {
     //make a socket connecting with server
@@ -85,9 +134,9 @@ void proxyDaemon::conToServer() {
     memset(&host_info, 0, sizeof(host_info));
     host_info.ai_family   = AF_INET;
     host_info.ai_socktype = SOCK_STREAM;
-    cout << myreqheader.value;
+    cout<<myreqheader["Host"]<<endl;
     //get the host address information
-    status = getaddrinfo("www.baidu.com","80", & host_info, &host_info_list);
+    status = getaddrinfo(myreqheader["Host"].c_str(),"80", & host_info, &host_info_list);
     if (status != 0) {
         perror("Error: cannot get server address\n");
         exit(EXIT_FAILURE);
@@ -105,27 +154,73 @@ void proxyDaemon::conToServer() {
         cerr << "fail to connect with server" << endl;
         exit(EXIT_FAILURE);
     }
-    string httpToserver = stickytogether();
-    status = send(sock_fd,httpToserver.c_str(),(size_t)httpToserver.size(),0 );
-
-
+    //string httpToserver = stickytogether();
+    status = send(sock_fd,client_buff.c_str(),(size_t)client_buff.size(),0 );
+    if(status == -1){
+        cerr << "fail to send message to server" << endl;
+        exit(EXIT_FAILURE);
+    }
+//    char tempbuff[25600];
+//    status = recv(sock_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
+//        if (status == -1) {
+//            cerr << "fail to receive message from server" << endl;
+//            exit(EXIT_FAILURE);
+//        }
+    //receive content from server
+    long block_size = 0;
+    //first get the response header
+    while(1) {
+        char tempbuff[256];
+        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+        if (status == -1) {
+            cerr << "fail to receive message from server" << endl;
+            exit(EXIT_FAILURE);
+        }
+        else{
+            server_buff.append(tempbuff);
+            block_size += status;
+            cout << tempbuff;
+            if(server_buff.find("r\n\r\n") != string::npos)
+                break;
+            memset(tempbuff, 0, sizeof(tempbuff));
+        }
+    }
+    size_t findheader;
+    int header_length=0;
+    if((findheader = server_buff.find("Content-Length")) != string::npos){
+        //findheader = atoi(server_buff.substr(findheader+16, ))
+        string tempstr = server_buff.substr(findheader+16);
+        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
+    }
+    cout << header_length;
+    while(1){
+        char tempbuff[256];
+        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+        if (status == -1) {
+            cerr << "fail to receive message from server" << endl;
+            exit(EXIT_FAILURE);
+        }
+        else{
+            server_buff.append(tempbuff);
+            block_size += status;
+            if(block_size >= header_length)
+                break;
+            memset(tempbuff, 0, sizeof(tempbuff));
+        }
+    }
+//    else if((findheader = server_buff.find("Content-Length")) != string::npos)
+    cout <<server_buff;
+    //server_buff.append(buff);
+}
+void proxyDaemon::responReq(int sock_fd) {
+    int status;
+    status = send(sock_fd,server_buff.c_str(),(size_t)server_buff.size(),0 );
+    if(status == -1){
+        cerr << "fail to sendback to client" << endl;
+        exit(EXIT_FAILURE);
+    }
 
 }
-string proxyDaemon::stickytogether() {
-    string temphttp(client_buff);
-    string httpToserver;
-    int spacepos = temphttp.find('\n');
-    httpToserver.append(temphttp.substr(0,spacepos));
-    cout<<httpToserver<<endl;
-    temphttp.erase(spacepos,1);
-    int prespace = spacepos;
-    spacepos = temphttp.find('\n');
-    httpToserver.append(temphttp.substr(prespace,spacepos));
-    cout << temphttp.substr(prespace,spacepos)<<endl;
-    return httpToserver;
-
-}
-
 //implementation of proxymanager class
 void proxymanager::runWithoutCache(char* port_n) {
     // proxyDaemon pd;
