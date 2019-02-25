@@ -23,11 +23,27 @@ void* proxyDaemon::acceptReq(void *sock_fd) {
     //thread detach
     //...
     //receive http from client
-    status = recv(*(int*)sock_fd, pd.client_buff, sizeof(pd.client_buff), MSG_WAITALL);
-    if(status == -1){
-        cerr << "fail to get message from client" << endl;
-        exit(EXIT_FAILURE);
+    int count = 0;
+    while(1) {
+        char tempbuff;
+        status = recv(*(int *) sock_fd, &tempbuff, sizeof(tempbuff), 0);
+        if (status == -1) {
+            cerr << "fail to get message from client" << endl;
+            exit(EXIT_FAILURE);
+        }
+        else if(tempbuff == '\r') {
+            if(count == 1 )
+                break;
+            else
+                count = 1;
+        }
+        else {
+            count =0;
+            pd.client_buff.push_back(tempbuff);
+            memset(&tempbuff, 0, sizeof(tempbuff));
+        }
     }
+    cout << pd.client_buff;
     //parse the http message
     pd.parseReq();
     pd.conToServer();
@@ -58,19 +74,56 @@ void proxyDaemon::parseReq() {
     prepos = spacepos;
     spacepos = temphttp.find('\n');
     myreqheader.value= temphttp.substr(prepos,spacepos-prepos);
-    temphttp.erase(spacepos, 1);
+    //temphttp.erase(spacepos, 1);
 
 }
 void proxyDaemon::conToServer() {
     //make a socket connecting with server
-    int sock_fd
+    int sock_fd;
     int status;
     struct addrinfo host_info, * host_info_list;
-    status = getaddrinfo(reqheader.value.c_str(),"80", & listen_info, &listen_info_list);
+    memset(&host_info, 0, sizeof(host_info));
+    host_info.ai_family   = AF_INET;
+    host_info.ai_socktype = SOCK_STREAM;
+    cout << myreqheader.value;
+    //get the host address information
+    status = getaddrinfo("www.baidu.com","80", & host_info, &host_info_list);
     if (status != 0) {
-        perror("Error: cannot get address info for listen\n");
-        return EXIT_FAILURE;
+        perror("Error: cannot get server address\n");
+        exit(EXIT_FAILURE);
     }
+    sock_fd  = socket(host_info_list->ai_family,
+                        host_info_list->ai_socktype,
+                        host_info_list->ai_protocol);
+    if (sock_fd == -1) {
+        cerr << "Error: cannot create socket to connect with server" << endl;
+        exit(EXIT_FAILURE);
+    }
+    //connect with server
+    status = connect(sock_fd, host_info_list->ai_addr,host_info_list->ai_addrlen);
+    if(status == -1){
+        cerr << "fail to connect with server" << endl;
+        exit(EXIT_FAILURE);
+    }
+    string httpToserver = stickytogether();
+    status = send(sock_fd,httpToserver.c_str(),(size_t)httpToserver.size(),0 );
+
+
+
+}
+string proxyDaemon::stickytogether() {
+    string temphttp(client_buff);
+    string httpToserver;
+    int spacepos = temphttp.find('\n');
+    httpToserver.append(temphttp.substr(0,spacepos));
+    cout<<httpToserver<<endl;
+    temphttp.erase(spacepos,1);
+    int prespace = spacepos;
+    spacepos = temphttp.find('\n');
+    httpToserver.append(temphttp.substr(prespace,spacepos));
+    cout << temphttp.substr(prespace,spacepos)<<endl;
+    return httpToserver;
+
 }
 
 //implementation of proxymanager class

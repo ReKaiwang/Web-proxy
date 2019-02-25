@@ -46,7 +46,7 @@ private:
     reqline myreqline;
     reqheader myreqheader;
     //http message from client
-    char client_buff[256];
+    string client_buff;
 public:
     static void createThread(int sock_fd);
     static void* acceptReq(void *sock_fd); // accept HTTP request from cline
@@ -57,6 +57,9 @@ public:
 //    writeCache(); // write to cache
 //    writeLog(); // write to log file
 //    responReq(); // response to client
+private:
+    //transform the http from client to server
+    string stickytogether();
 };
 
 class proxymanager{
