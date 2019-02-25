@@ -39,7 +39,7 @@ void* proxyDaemon::acceptReq(void *sock_fd) {
     //if POST
 //    else if(strcmp(method,"POS")==0){
 //        pd.recvPOST(*(int *) sock_fd);
-//    }
+//       }
 
     //cout << pd.client_buff;
     //parse the http message
@@ -59,7 +59,7 @@ void proxyDaemon::recvGET(int sock_fd) {
             exit(EXIT_FAILURE);
         }
         else {
-            client_buff.append(tempbuff);
+            client_buff.append(tempbuff,status);
             if(client_buff.find("\r\n\r\n") != string::npos)
                 break;
             memset(tempbuff, 0, sizeof(tempbuff));
@@ -177,39 +177,43 @@ void proxyDaemon::conToServer() {
             exit(EXIT_FAILURE);
         }
         else{
-            server_buff.append(tempbuff);
+            if(status == 0)
+                break;
+            server_buff.append(tempbuff,status);
             block_size += status;
-            cout << tempbuff;
+            //cout << block_size <<endl;
+            //cout << tempbuff;
             if(server_buff.find("r\n\r\n") != string::npos)
-                break;
+                     break;
             memset(tempbuff, 0, sizeof(tempbuff));
         }
     }
-    size_t findheader;
-    int header_length=0;
-    if((findheader = server_buff.find("Content-Length")) != string::npos){
-        //findheader = atoi(server_buff.substr(findheader+16, ))
-        string tempstr = server_buff.substr(findheader+16);
-        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
-    }
-    cout << header_length;
-    while(1){
-        char tempbuff[256];
-        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
-        if (status == -1) {
-            cerr << "fail to receive message from server" << endl;
-            exit(EXIT_FAILURE);
-        }
-        else{
-            server_buff.append(tempbuff);
-            block_size += status;
-            if(block_size >= header_length)
-                break;
-            memset(tempbuff, 0, sizeof(tempbuff));
-        }
-    }
+    cout << server_buff.find("r\n\r\n")<<endl;
+//    size_t findheader;
+//    int header_length=0;
+//    if((findheader = server_buff.find("Content-Length")) != string::npos){
+//        //findheader = atoi(server_buff.substr(findheader+16, ))
+//        string tempstr = server_buff.substr(findheader+16);
+//        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
+//    }
+//    cout << header_length;
+//    while(1){
+//        char tempbuff[256];
+//        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+//        if (status == -1) {
+//            cerr << "fail to receive message from server" << endl;
+//            exit(EXIT_FAILURE);
+//        }
+//        else{
+//            server_buff.append(tempbuff,status);
+//            block_size += status;
+//            if(block_size >= header_length)
+//                break;
+//            memset(tempbuff, 0, sizeof(tempbuff));
+//        }
+//    }
 //    else if((findheader = server_buff.find("Content-Length")) != string::npos)
-    cout <<server_buff;
+   // cout <<server_buff;
     //server_buff.append(buff);
 }
 void proxyDaemon::responReq(int sock_fd) {
