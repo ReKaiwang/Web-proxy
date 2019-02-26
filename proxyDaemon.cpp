@@ -100,40 +100,40 @@ void proxyDaemon::recvGET(int sock_fd) {
   // cout << client_buff.find("\r\n\r\n");
   cout << client_buff;
   */
-  recvHTTP<false>(sock_fd, 0, 0);
+  recvHTTP<false>(sock_fd, client_buff,0, 0);
 }
 
 /* receive all the contents from the client*/
 template <bool flag>
-void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
-                           int content_length ) {
+void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
+                           int content_length) {
   int status;
   while (1) {
       char tempbuff[BUFFSIZE];
 
     status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
-      cerr << "fail to receive message from client" << endl;
+      cerr << "fail to receive message" << endl;
       // exit(EXIT_FAILURE);
       terminate();
     } else {
-      client_buff.append(tempbuff, status);
+      recvbuff.append(tempbuff, status);
       if (flag) {
         if (status == 0) {
           break;
         }
-        if (client_buff.size() - noncontentsize>= content_length) {
+        if (recvbuff.size() - noncontentsize>= content_length) {
           break;
         }
       }
 
-      if (!flag && client_buff.find("\r\n\r\n") != string::npos) {
+      if (!flag && recvbuff.find("\r\n\r\n") != string::npos) {
         break;
       }
       memset(tempbuff, 0, sizeof(tempbuff));
     }
   }
-  cout << client_buff << endl;
+  cout << recvbuff << endl;
 }
 void proxyDaemon::recvSSLHTTP(int sock_fd){
   int status;
@@ -163,7 +163,7 @@ void proxyDaemon::recvSSLHTTP(int sock_fd){
  */
 void proxyDaemon::recvPOST(int sock_fd) {
   client_buff.append("POS");
-  recvHTTP<false>(sock_fd, 0, 0);
+  recvHTTP<false>(sock_fd, client_buff,0, 0);
   size_t findlength;
   int content_length = 0;
   if ((findlength = client_buff.find("Content-Length")) != string::npos) {
@@ -173,7 +173,7 @@ void proxyDaemon::recvPOST(int sock_fd) {
     //content_length = octToDec(content_length);
     int noncontentsize =
         client_buff.substr(0, client_buff.find("\r\n\r\n") + 4).size();
-    recvHTTP<true>(sock_fd, noncontentsize, content_length);
+    recvHTTP<true>(sock_fd, client_buff,noncontentsize, content_length);
   } else {
     cerr << "wrong POST form" << endl;
   }
@@ -379,57 +379,68 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
   //            exit(EXIT_FAILURE);
   //        }
   // receive content from server
-  long block_size = 0;
-  // first get the status line and response header
-  while (1) {
-    char tempbuff[BUFFSIZE];
-    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
-    if (status == -1) {
-      cerr << "fail to receive message from server" << endl;
-      close(client_fd);
-      close(server_fd);
-      terminate();
-    } else {
-      if (status == 0)
-        break;
-      server_buff.append(tempbuff, status);
-      block_size += status;
-      cout << tempbuff;
-      // what is wrong here?
-      if (server_buff.find("\r\n\r\n") != string::npos)
-        break;
-      memset(tempbuff, 0, sizeof(tempbuff));
-    }
-  }
+//  long block_size = 0;
+//  // first get the status line and response header
+//  while (1) {
+//    char tempbuff[BUFFSIZE];
+//    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
+//    if (status == -1) {
+//      cerr << "fail to receive message from server" << endl;
+//      close(client_fd);
+//      close(server_fd);
+//      terminate();
+//    } else {
+//      if (status == 0)
+//        break;
+//      server_buff.append(tempbuff, status);
+//      block_size += status;
+//      cout << tempbuff;
+//      // what is wrong here?
+//      if (server_buff.find("\r\n\r\n") != string::npos)
+//        break;
+//      memset(tempbuff, 0, sizeof(tempbuff));
+//    }
+//  }
   // cout << server_buff.find("\r\n\r\n")<<endl;
-
-  size_t findheader;
-  int header_length = 0;
-  if ((findheader = server_buff.find("Content-Length")) != string::npos) {
+  recvHTTP<false>(server_fd, server_buff,0, 0);
+  size_t findlength;
+  int content_length = 0;
+  if ((findlength = server_buff.find("Content-Length")) != string::npos) {
     // findheader = atoi(server_buff.substr(findheader+16, ))
-    string tempstr = server_buff.substr(findheader + 16);
-    header_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
+    string tempstr = server_buff.substr(findlength + 16);
+    content_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
+    //content_length = octToDec(content_length);
+    int noncontentsize =
+            server_buff.substr(0, server_buff.find("\r\n\r\n") + 4).size();
+    recvHTTP<true>(server_fd,server_buff, noncontentsize, content_length);
+  } else {
+    cerr << "wrong form from server" << endl;
   }
-  // cout << header_length<<endl;
-  //  cout << block_size;
-  while (1) {
-    char tempbuff[BUFFSIZE];
-    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
-    if (status == -1) {
-      cerr << "fail to receive message from server" << endl;
-      close(client_fd);
-      close(server_fd);
-      terminate();
-    } else {
-      if (status == 0)
-        break;
-      server_buff.append(tempbuff, status);
-      block_size += status;
-      if (block_size >= header_length)
-        break;
-      memset(tempbuff, 0, sizeof(tempbuff));
-    }
-  }
+//  if ((findheader = server_buff.find("Content-Length")) != string::npos) {
+//    // findheader = atoi(server_buff.substr(findheader+16, ))
+//    string tempstr = server_buff.substr(findheader + 16);
+//    header_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
+//  }
+//  // cout << header_length<<endl;
+//  //  cout << block_size;
+//  while (1) {
+//    char tempbuff[BUFFSIZE];
+//    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
+//    if (status == -1) {
+//      cerr << "fail to receive message from server" << endl;
+//      close(client_fd);
+//      close(server_fd);
+//      terminate();
+//    } else {
+//      if (status == 0)
+//        break;
+//      server_buff.append(tempbuff, status);
+//      block_size += status;
+//      if (block_size >= header_length)
+//        break;
+//      memset(tempbuff, 0, sizeof(tempbuff));
+//    }
+//  }
   cout << server_buff;
   // deal with chunked data
   // else if((findheader = server_buff.find("Content-Length")) != string::npos)

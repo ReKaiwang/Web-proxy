@@ -61,7 +61,7 @@ public:
   void responReq(int client_fd, int server_fd); //receive response from server
   void ssresponReq(int client_fd, int server_fd);
   template <bool flag>
-  void recvHTTP(int sock_fd, int noncontentsize = 0, int content_length = 0);
+  void recvHTTP(int sock_fd, string& recvbuff,int noncontentsize = 0, int content_length = 0);
   void recvSSLHTTP(int sock_fd);
   //    createThread(); // create a thread
   //    readCache(); // read from cache
