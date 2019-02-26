@@ -42,13 +42,16 @@ void* proxyDaemon::acceptReq(void *sock_fd) {
         pd.recvGET(*(int *) sock_fd);
     }
     //if POST
-//    else if(strcmp(method,"POS")==0){
-//        pd.recvPOST(*(int *) sock_fd);
-//       }
+    else if(strcmp(method,"POS")==0){
+        pd.recvPOST(*(int *) sock_fd);
+       }
 
     //cout << pd.client_buff;
     //parse the http message
-    pd.parseReq();
+    if(pd.parseReq() == -1) {
+        close(*(int*) sock_fd);
+        return NULL;
+    }
     pd.conToServer();
     pd.responReq(*(int*) sock_fd);
     close(*(int*) sock_fd);
@@ -74,7 +77,67 @@ void proxyDaemon::recvGET(int sock_fd) {
     //cout << client_buff.find("\r\n\r\n");
     cout << client_buff;
 }
-void proxyDaemon::parseReq() {
+void proxyDaemon::recvPOST(int sock_fd) {
+    client_buff.append("POS");
+    int status;
+    while(1){
+        char tempbuff[256];
+        status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+        if (status == -1) {
+            cerr << "fail to get message from client" << endl;
+            exit(EXIT_FAILURE);
+        }
+        else {
+            client_buff.append(tempbuff,status);
+            if(client_buff.find("\r\n\r\n") != string::npos)
+                break;
+            memset(tempbuff, 0, sizeof(tempbuff));
+        }
+    }
+
+    size_t findlength;
+    int content_length=0;
+    if((findlength = client_buff.find("Content-Length")) != string::npos){
+        //findheader = atoi(server_buff.substr(findheader+16, ))
+        string tempstr = client_buff.substr(findlength+16);
+        content_length = atoi(tempstr.substr(0,tempstr.find("\r\n")).c_str());
+        content_length = hexTooct(content_length);
+        int nocontentsize = client_buff.substr(0,client_buff.find("\r\n\r\n")+4).size();
+        while(1){
+            char tempbuff[256];
+            status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+            if (status == -1) {
+                cerr << "fail to receive message from server" << endl;
+                exit(EXIT_FAILURE);
+            }
+            else{
+                if(status == 0)
+                    break;
+                server_buff.append(tempbuff,status);
+                if(client_buff.size() - nocontentsize +2 >= content_length)
+                    break;
+                memset(tempbuff, 0, sizeof(tempbuff));
+            }
+        }
+        //client_buff.append("\r\n");
+    }
+    else{
+        cerr << "wrong POST form"<<endl;
+    }
+    cout << client_buff <<endl;
+    cout << "POST SUCESS"<<endl;
+}
+long proxyDaemon::hexTooct(long num) {
+    long result = 0;
+    int ot = 1;
+    while(num > 0){
+        result += num%10*ot;
+        num /= 10;
+        ot = ot*8;
+    }
+    return result;
+}
+int proxyDaemon::parseReq() {
     //parse the request line
 //    int spacepos = temphttp.find(' ');
 //    int prepos;
@@ -93,6 +156,7 @@ void proxyDaemon::parseReq() {
     int sepepoint = temp.find("\r\n");
     if(sepepoint == string::npos){
         cerr<<"can't find request line";
+        return -1;
         //exit(EXIT_FAILURE);
     }
     string firstline = temp.substr(0,sepepoint);
@@ -110,7 +174,7 @@ void proxyDaemon::parseReq() {
 //    //temphttp.erase(spacepos, 1);
     string header = temp.substr(sepepoint,temp.find("\r\n\r\n")-sepepoint);
     parsereqhead(header);
-
+    return 1;
 }
 void proxyDaemon::parsereqline(string& reqline) {
     int spacepos = reqline.find(' ');
@@ -141,10 +205,18 @@ void proxyDaemon::conToServer() {
     memset(&host_info, 0, sizeof(host_info));
     host_info.ai_family   = AF_INET;
     host_info.ai_socktype = SOCK_STREAM;
-    cout<<myreqheader["Host"]<<endl;
+    //cout<<myreqheader["Host"]<<endl;
     //get the host address information
     pthread_rwlock_wrlock(& heaplock);
-    status = getaddrinfo(myreqheader["Host"].c_str(),"80", & host_info, &host_info_list);
+    string port = "80";
+    size_t findport;
+    if((findport = myreqheader["Host"].find(":"))!= string::npos){
+        port = myreqheader["Host"].substr(findport+1);
+        myreqheader["Host"].erase(findport);
+    }
+    cout << myreqheader["Host"]<<endl;
+    cout << port <<endl;
+    status = getaddrinfo(myreqheader["Host"].c_str(),port.c_str(), & host_info, &host_info_list);
     if (status != 0) {
         perror("Error: cannot get server address\n");
         exit(EXIT_FAILURE);
@@ -169,6 +241,7 @@ void proxyDaemon::conToServer() {
         cerr << "fail to send message to server" << endl;
         exit(EXIT_FAILURE);
     }
+    cout << "sendsuceess"<<endl;
 //    char tempbuff[25600];
 //    status = recv(sock_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
 //        if (status == -1) {
@@ -190,6 +263,7 @@ void proxyDaemon::conToServer() {
                 break;
             server_buff.append(tempbuff,status);
             block_size += status;
+            cout << tempbuff;
             //what is wrong here?
             if(server_buff.find("\r\n\r\n") != string::npos)
                      break;
@@ -203,10 +277,10 @@ void proxyDaemon::conToServer() {
     if((findheader = server_buff.find("Content-Length")) != string::npos){
         //findheader = atoi(server_buff.substr(findheader+16, ))
         string tempstr = server_buff.substr(findheader+16);
-        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n\r\n")).c_str());
+        header_length = atoi(tempstr.substr(0,tempstr.find("\r\n")).c_str());
     }
-    cout << header_length<<endl;
-    cout << block_size;
+   // cout << header_length<<endl;
+  //  cout << block_size;
     while(1){
         char tempbuff[256];
         status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);

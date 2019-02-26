@@ -52,7 +52,7 @@ private:
 public:
     static void createThread(int sock_fd);
     static void* acceptReq(void *sock_fd); // accept HTTP request from cline
-    void parseReq(); // parse HTTP request into method, URL and context
+    int parseReq(); // parse HTTP request into method, URL and context
     void conToServer(); // connect to required server
     void responReq(int sock_fd);
 //    createThread(); // create a thread
@@ -68,6 +68,7 @@ private:
     void parsereqline(string& reqline);
     void parsereqhead(string& reqhead);
     void parsereqheadhelp(string& perline);
+    long hexTooct(long num);
 };
 
 class proxymanager{
