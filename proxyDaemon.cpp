@@ -349,31 +349,7 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
        //terminate();
       pthread_exit((void*) 0);
       }
-    /*
-    for(int i =0; i <= fdmax; i++) {
-      char temp[256];
-      if(FD_ISSET(i, & read_fds)){
-        status = recv(i,temp, sizeof(temp), 0);
-        if(status < 0){
-          if(status == 0){
-            close(client_fd);
-            close(server_fd);
-            terminate();
-          }
-          else{
-            cerr << "some wrong happen during SSL"<<endl;
-            close(client_fd);
-            close(server_fd);
-            terminate();
-          }
-        }
-        if(i == client_fd){
-          status = send(server_fd, temp, status, 0);
-        }
-        else if(i == server_fd){
-          status = send(client_fd, temp, status, 0);
-        }
-      }*/
+  
       if(FD_ISSET(client_fd, & read_fds)){
         selectRecv(client_fd,server_fd);
       }
