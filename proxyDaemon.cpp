@@ -51,6 +51,7 @@ void *proxyDaemon::acceptReq(void *client_fd) {
   }
   // if CONNECT
   else if(strcmp(method,"CON") == 0){
+      cout << "CONNECT!" <<endl;
       pd.recvCONNECT(*(int *)client_fd);
   }
   else{
@@ -99,22 +100,17 @@ void proxyDaemon::recvGET(int sock_fd) {
   // cout << client_buff.find("\r\n\r\n");
   cout << client_buff;
   */
-  recvHTTP<false>(sock_fd, 0, 0,false);
+  recvHTTP<false>(sock_fd, 0, 0);
 }
 
 /* receive all the contents from the client*/
 template <bool flag>
 void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
-                           int content_length, bool isconnect ) {
+                           int content_length ) {
   int status;
   while (1) {
-    if(isconnect){
-      char tempbuff[CONNECTBUFFSIZE];
-    }
-    else
-    {
       char tempbuff[BUFFSIZE];
-    }
+
     status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
       cerr << "fail to receive message from client" << endl;
@@ -126,7 +122,7 @@ void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
         if (status == 0) {
           break;
         }
-        if (client_buff.size() - noncontentsize + 2 >= content_length) {
+        if (client_buff.size() - noncontentsize>= content_length) {
           break;
         }
       }
@@ -139,23 +135,45 @@ void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
   }
   cout << client_buff << endl;
 }
+void proxyDaemon::recvSSLHTTP(int sock_fd){
+  int status;
+  while (1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if (status == -1) {
+      cerr << "fail to receive message from client" << endl;
+      // exit(EXIT_FAILURE);
+      terminate();
+    } else {
+      client_buff.push_back(tempbuff);
+      if (status == 0) {
+        break;
+      }
+
+      if (client_buff.find("\r\n\r\n") != string::npos) {
+        break;
+      }
+    }
+  }
+  cout << client_buff<<endl;
+}
 
 /* handle request with method 'POST'
  * get the http request from client
  */
 void proxyDaemon::recvPOST(int sock_fd) {
   client_buff.append("POS");
-  recvHTTP<false>(sock_fd, 0, 0,false);
+  recvHTTP<false>(sock_fd, 0, 0);
   size_t findlength;
   int content_length = 0;
   if ((findlength = client_buff.find("Content-Length")) != string::npos) {
     // findheader = atoi(server_buff.substr(findheader+16, ))
     string tempstr = client_buff.substr(findlength + 16);
     content_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
-    content_length = octToDec(content_length);
+    //content_length = octToDec(content_length);
     int noncontentsize =
         client_buff.substr(0, client_buff.find("\r\n\r\n") + 4).size();
-    recvHTTP<true>(sock_fd, noncontentsize, content_length,false);
+    recvHTTP<true>(sock_fd, noncontentsize, content_length);
   } else {
     cerr << "wrong POST form" << endl;
   }
@@ -176,7 +194,7 @@ long proxyDaemon::octToDec(long num) {
 
 void proxyDaemon::recvCONNECT(int sock_fd){
   client_buff.append("CON");
-  recvHTTP<false>(sock_fd, 0, 0,true);
+  recvSSLHTTP(sock_fd);
 }
 int proxyDaemon::parseReq() {
   // parse the request line
@@ -211,7 +229,8 @@ int proxyDaemon::parseReq() {
   //    spacepos = temphttp.find("\r\n");
   //    myreqheader.value= temphttp.substr(prepos,spacepos-prepos);
   //    temphttp.erase(spacepos, 1);
-  string header = temp.substr(sepepoint, temp.find("\r\n\r\n") - sepepoint);
+  //string header = temp.substr(sepepoint, temp.find("\r\n\r\n") - sepepoint);
+  string header = temp.substr(sepepoint);
   parsereqhead(header);
   return 1;
 }
@@ -236,7 +255,7 @@ void proxyDaemon::parsereqhead(string &reqhead) {
   }
   string tempsubstr = reqhead.substr(hostpoint);
   myreqheader["Host"] =
-      tempsubstr.substr(hostpoint + 6, tempsubstr.find("\r\n") - hostpoint - 6);
+      tempsubstr.substr(6, tempsubstr.find("\r\n") - 6);
 }
 int proxyDaemon::conToServer() {
   // make a socket connecting with server
@@ -295,6 +314,9 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
   int fdmax=0; // maximum file descriptor number
   FD_ZERO(&master);    // clear the master and temp sets
   FD_ZERO(&read_fds);
+  //send 200 OK to client
+  char* okbuff = (char *)"HTTP/1.1 200 OK\r\n";
+  status = send(client_fd,okbuff, 17, 0);
   FD_SET(client_fd, &master); // add to master set
   if (client_fd > fdmax) {
     fdmax = client_fd;
@@ -310,8 +332,28 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
       exit(4);
     }
     for(int i =0; i <= fdmax; i++) {
+      char temp[256];
       if(FD_ISSET(i, & read_fds)){
-        
+        status = recv(i,temp, sizeof(temp), 0);
+        if(status < 0){
+          if(status == 0){
+            close(client_fd);
+            close(server_fd);
+            terminate();
+          }
+          else{
+            cerr << "some wrong happen during SSL"<<endl;
+            close(client_fd);
+            close(server_fd);
+            terminate();
+          }
+        }
+        if(i == client_fd){
+          status = send(server_fd, temp, sizeof(temp), 0);
+        }
+        else if(i == server_fd){
+          status = send(client_fd, temp, sizeof(temp), 0);
+        }
       }
     }
     }
@@ -325,6 +367,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
   status = send(server_fd, client_buff.c_str(), (size_t)client_buff.size(), 0);
   if (status == -1) {
     cerr << "fail to send message to server" << endl;
+    close(client_fd);
+    close(server_fd);
     terminate();
   }
   cout << "sendsuceess" << endl;
@@ -342,6 +386,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
       cerr << "fail to receive message from server" << endl;
+      close(client_fd);
+      close(server_fd);
       terminate();
     } else {
       if (status == 0)
@@ -371,6 +417,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
       cerr << "fail to receive message from server" << endl;
+      close(client_fd);
+      close(server_fd);
       terminate();
     } else {
       if (status == 0)
@@ -382,7 +430,7 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
       memset(tempbuff, 0, sizeof(tempbuff));
     }
   }
-
+  cout << server_buff;
   // deal with chunked data
   // else if((findheader = server_buff.find("Content-Length")) != string::npos)
   status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
@@ -421,8 +469,7 @@ int proxyDaemon::createListenFd(char *port_n) {
   }
 
   // begin listening
-  if ((status = bind(listen_sofd, host_info_list->ai_addr,
-                     host_info_list->ai_addrlen)) == -1) {
+  if ((status = bind(listen_sofd, host_info_list->ai_addr,host_info_list->ai_addrlen)) == -1) {
     cerr << "Error: cannot bind socket" << endl;
     exit(EXIT_FAILURE);
   }
