@@ -143,7 +143,8 @@ void proxyDaemon::recvSSLHTTP(int sock_fd){
     if (status == -1) {
       cerr << "fail to receive message from client" << endl;
       // exit(EXIT_FAILURE);
-      terminate();
+      //terminate();
+      pthread_exit((void*) 0);
     } else {
       client_buff.push_back(tempbuff);
       if (status == 0) {
@@ -251,7 +252,8 @@ void proxyDaemon::parsereqhead(string &reqhead) {
   if (hostpoint == string::npos) {
     cerr << "can't find the host" << endl;
     // exit(EXIT_FAILURE);
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
   string tempsubstr = reqhead.substr(hostpoint);
   myreqheader["Host"] =
@@ -284,14 +286,16 @@ int proxyDaemon::conToServer() {
   if (status != 0) {
     perror("Error: cannot get server address\n");
     // exit(EXIT_FAILURE);
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
   sock_fd = socket(host_info_list->ai_family, host_info_list->ai_socktype,
                    host_info_list->ai_protocol);
   if (sock_fd == -1) {
     cerr << "Error: cannot create socket to connect with server" << endl;
     //    exit(EXIT_FAILURE);
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
   // connect with server
   status =
@@ -299,7 +303,8 @@ int proxyDaemon::conToServer() {
   pthread_rwlock_unlock(&heaplock);
   if (status == -1) {
     cerr << "fail to connect with server" << endl;
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
   return sock_fd;
   // deal with chunked data
@@ -315,8 +320,19 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
   FD_ZERO(&master);    // clear the master and temp sets
   FD_ZERO(&read_fds);
   //send 200 OK to client
-  char* okbuff = (char *)"HTTP/1.1 200 OK\r\n";
-  status = send(client_fd,okbuff, 17, 0);
+  char* okbuff = (char *)"HTTP/1.1 200 OK\r\n\r\n";
+  status = send(client_fd,okbuff, 40, 0);
+  if(status == -1){
+    cerr << "fails to send to client"<<endl;
+    //terminate();
+    pthread_exit((void*) 0);
+  }
+//  status = send(server_fd,client_buff.c_str(),(size_t)client_buff.size(),0);
+//  if(status == -1){
+//    cerr << "fails to send to server"<<endl;
+//    terminate();
+//  }
+  cout << okbuff<<endl;
   FD_SET(client_fd, &master); // add to master set
   if (client_fd > fdmax) {
     fdmax = client_fd;
@@ -328,9 +344,12 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
   while(1) {
     read_fds = master;
     if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
-      perror("select");
-      exit(4);
-    }
+       perror("select");
+       //exit(4);
+       //terminate();
+      pthread_exit((void*) 0);
+      }
+    /*
     for(int i =0; i <= fdmax; i++) {
       char temp[256];
       if(FD_ISSET(i, & read_fds)){
@@ -349,16 +368,41 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
           }
         }
         if(i == client_fd){
-          status = send(server_fd, temp, sizeof(temp), 0);
+          status = send(server_fd, temp, status, 0);
         }
         else if(i == server_fd){
-          status = send(client_fd, temp, sizeof(temp), 0);
+          status = send(client_fd, temp, status, 0);
         }
+      }*/
+      if(FD_ISSET(client_fd, & read_fds)){
+        selectRecv(client_fd,server_fd);
       }
-    }
-    }
+      if(FD_ISSET(server_fd, & read_fds)){
+        selectRecv(server_fd,client_fd);
+      }
+  }
+}
 
 
+void proxyDaemon::selectRecv(int recv_fd, int send_fd) {
+  char tempbuff[256];
+  int status;
+  status = recv(recv_fd, tempbuff, sizeof(tempbuff), 0);
+  if (status < 0) {
+    if (status == 0) {
+      close(recv_fd);
+      close(send_fd);
+      //terminate();
+      pthread_exit((void*) 0);
+    } else {
+      cerr << "some wrong happen during SSL" << endl;
+      close(recv_fd);
+      close(send_fd);
+      //terminate();
+      pthread_exit((void*) 0);
+    }
+  }
+  status = send(send_fd, tempbuff, status, 0);
 }
 void proxyDaemon::responReq(int client_fd, int server_fd) {
   int status;
@@ -369,7 +413,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     cerr << "fail to send message to server" << endl;
     close(client_fd);
     close(server_fd);
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
   cout << "sendsuceess" << endl;
   //    char tempbuff[25600];
@@ -447,7 +492,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
   status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
   if (status == -1) {
     cerr << "fail to sendback to client" << endl;
-    terminate();
+    //terminate();
+    pthread_exit((void*) 0);
   }
 
 }

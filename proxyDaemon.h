@@ -78,6 +78,7 @@ private:
   void parsereqhead(string &reqhead);
   void parsereqheadhelp(string &perline);
   long octToDec(long num);
+  void selectRecv(int recv_fd, int send_fd);
 };
 
 class proxymanager {
