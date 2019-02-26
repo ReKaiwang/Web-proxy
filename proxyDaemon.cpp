@@ -13,8 +13,11 @@
 #include <string>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 using namespace std;
+#define CONNECTBUFFSIZE 1
+#define BUFFSIZE 256
 // a heap lock
 pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
 // implementation of proxyDaemon class
@@ -27,11 +30,11 @@ void proxyDaemon::handleReq(int sock_fd) {
  * and send req to target server and then
  * return response
  */
-void *proxyDaemon::acceptReq(void *sock_fd) {
+void *proxyDaemon::acceptReq(void *client_fd) {
   proxyDaemon pd;
   int status;
   char method[4];
-  status = recv(*(int *)sock_fd, method, sizeof(method) - sizeof(char), 0);
+  status = recv(*(int *)client_fd, method, sizeof(method) - sizeof(char), 0);
   if (status == -1) {
     cerr << "fail to get http request from client" << endl;
     return NULL;
@@ -40,24 +43,35 @@ void *proxyDaemon::acceptReq(void *sock_fd) {
   // if GET
   if (strcmp(method, "GET") == 0) {
     cout << "get request" << endl;
-    pd.recvGET(*(int *)sock_fd);
+    pd.recvGET(*(int *)client_fd);
   }
   // if POST
   else if (strcmp(method, "POS") == 0) {
-    pd.recvPOST(*(int *)sock_fd);
+    pd.recvPOST(*(int *)client_fd);
   }
-
   // if CONNECT
-
+  else if(strcmp(method,"CON") == 0){
+      pd.recvCONNECT(*(int *)client_fd);
+  }
+  else{
+      cout << "Not support " << method <<endl;
+      return NULL;
+  }
   // parse the http message
   if (pd.parseReq() == -1) {
-    close(*(int *)sock_fd);
+    close(*(int *)client_fd);
     return NULL;
   }
 
-  pd.conToServer();
-  pd.responReq(*(int *)sock_fd);
-  close(*(int *)sock_fd);
+  int server_fd = pd.conToServer();
+  if(pd.myreqline.method == "CONNECT") {
+    pd.ssresponReq(*(int *) client_fd, server_fd);
+  }
+  else {
+    pd.responReq(*(int *) client_fd, server_fd);
+  }
+  close(server_fd);
+  close(*(int *)client_fd);
   return NULL;
 }
 
@@ -85,33 +99,36 @@ void proxyDaemon::recvGET(int sock_fd) {
   // cout << client_buff.find("\r\n\r\n");
   cout << client_buff;
   */
-  recvHTTP<false>(sock_fd, 0, 0);
+  recvHTTP<false>(sock_fd, 0, 0,false);
 }
 
 /* receive all the contents from the client*/
 template <bool flag>
 void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
-                           int content_length) {
+                           int content_length, bool isconnect ) {
   int status;
   while (1) {
-    char tempbuff[256];
+    if(isconnect){
+      char tempbuff[CONNECTBUFFSIZE];
+    }
+    else
+    {
+      char tempbuff[BUFFSIZE];
+    }
     status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
-      cerr << "fail to receive message from server" << endl;
+      cerr << "fail to receive message from client" << endl;
       // exit(EXIT_FAILURE);
       terminate();
     } else {
-
+      client_buff.append(tempbuff, status);
       if (flag) {
-        server_buff.append(tempbuff, status);
         if (status == 0) {
           break;
         }
         if (client_buff.size() - noncontentsize + 2 >= content_length) {
           break;
         }
-      } else {
-        client_buff.append(tempbuff, status);
       }
 
       if (!flag && client_buff.find("\r\n\r\n") != string::npos) {
@@ -128,7 +145,7 @@ void proxyDaemon::recvHTTP(int sock_fd, int noncontentsize,
  */
 void proxyDaemon::recvPOST(int sock_fd) {
   client_buff.append("POS");
-  recvHTTP<false>(sock_fd, 0, 0);
+  recvHTTP<false>(sock_fd, 0, 0,false);
   size_t findlength;
   int content_length = 0;
   if ((findlength = client_buff.find("Content-Length")) != string::npos) {
@@ -138,7 +155,7 @@ void proxyDaemon::recvPOST(int sock_fd) {
     content_length = octToDec(content_length);
     int noncontentsize =
         client_buff.substr(0, client_buff.find("\r\n\r\n") + 4).size();
-    recvHTTP<true>(sock_fd, noncontentsize, content_length);
+    recvHTTP<true>(sock_fd, noncontentsize, content_length,false);
   } else {
     cerr << "wrong POST form" << endl;
   }
@@ -157,6 +174,10 @@ long proxyDaemon::octToDec(long num) {
   return result;
 }
 
+void proxyDaemon::recvCONNECT(int sock_fd){
+  client_buff.append("CON");
+  recvHTTP<false>(sock_fd, 0, 0,true);
+}
 int proxyDaemon::parseReq() {
   // parse the request line
   //    int spacepos = temphttp.find(' ');
@@ -217,12 +238,13 @@ void proxyDaemon::parsereqhead(string &reqhead) {
   myreqheader["Host"] =
       tempsubstr.substr(hostpoint + 6, tempsubstr.find("\r\n") - hostpoint - 6);
 }
-void proxyDaemon::conToServer() {
+int proxyDaemon::conToServer() {
   // make a socket connecting with server
   int sock_fd;
   int status;
   struct addrinfo host_info, *host_info_list;
   memset(&host_info, 0, sizeof(host_info));
+
   host_info.ai_family = AF_INET;
   host_info.ai_socktype = SOCK_STREAM;
   // cout<<myreqheader["Host"]<<endl;
@@ -238,6 +260,8 @@ void proxyDaemon::conToServer() {
   cout << port << endl;
   status = getaddrinfo(myreqheader["Host"].c_str(), port.c_str(), &host_info,
                        &host_info_list);
+  //create a smart pointer
+  unique_ptr<struct addrinfo> sptr(host_info_list);
   if (status != 0) {
     perror("Error: cannot get server address\n");
     // exit(EXIT_FAILURE);
@@ -258,15 +282,54 @@ void proxyDaemon::conToServer() {
     cerr << "fail to connect with server" << endl;
     terminate();
   }
+  return sock_fd;
+  // deal with chunked data
+  // else if((findheader = server_buff.find("Content-Length")) != string::npos)
+  // cout <<server_buff;
+  // server_buff.append(buff);
+}
+void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
+  int status;
+  fd_set master; //master  fd
+  fd_set read_fds; // temperate read list
+  int fdmax=0; // maximum file descriptor number
+  FD_ZERO(&master);    // clear the master and temp sets
+  FD_ZERO(&read_fds);
+  FD_SET(client_fd, &master); // add to master set
+  if (client_fd > fdmax) {
+    fdmax = client_fd;
+  }
+  FD_SET(server_fd, &master); // add to master set
+  if (server_fd > fdmax) {
+    fdmax = server_fd;
+  }
+  while(1) {
+    read_fds = master;
+    if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+      perror("select");
+      exit(4);
+    }
+    for(int i =0; i <= fdmax; i++) {
+      if(FD_ISSET(i, & read_fds)){
+        
+      }
+    }
+    }
+
+
+}
+void proxyDaemon::responReq(int client_fd, int server_fd) {
+  int status;
+
   // string httpToserver = stickytogether();
-  status = send(sock_fd, client_buff.c_str(), (size_t)client_buff.size(), 0);
+  status = send(server_fd, client_buff.c_str(), (size_t)client_buff.size(), 0);
   if (status == -1) {
     cerr << "fail to send message to server" << endl;
     terminate();
   }
   cout << "sendsuceess" << endl;
   //    char tempbuff[25600];
-  //    status = recv(sock_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
+  //    status = recv(client_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
   //        if (status == -1) {
   //            cerr << "fail to receive message from server" << endl;
   //            exit(EXIT_FAILURE);
@@ -275,8 +338,8 @@ void proxyDaemon::conToServer() {
   long block_size = 0;
   // first get the status line and response header
   while (1) {
-    char tempbuff[256];
-    status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+    char tempbuff[BUFFSIZE];
+    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
       cerr << "fail to receive message from server" << endl;
       terminate();
@@ -304,8 +367,8 @@ void proxyDaemon::conToServer() {
   // cout << header_length<<endl;
   //  cout << block_size;
   while (1) {
-    char tempbuff[256];
-    status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+    char tempbuff[BUFFSIZE];
+    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
     if (status == -1) {
       cerr << "fail to receive message from server" << endl;
       terminate();
@@ -322,16 +385,12 @@ void proxyDaemon::conToServer() {
 
   // deal with chunked data
   // else if((findheader = server_buff.find("Content-Length")) != string::npos)
-  // cout <<server_buff;
-  // server_buff.append(buff);
-}
-void proxyDaemon::responReq(int sock_fd) {
-  int status;
-  status = send(sock_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
+  status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
   if (status == -1) {
     cerr << "fail to sendback to client" << endl;
     terminate();
   }
+
 }
 
 int proxyDaemon::createListenFd(char *port_n) {

@@ -57,10 +57,11 @@ public:
   static void handleReq(int sock_fd);
   static void *acceptReq(void *sock_fd); // accept HTTP request from cline
   int parseReq();     // parse HTTP request into method, URL and context
-  void conToServer(); // connect to required server
-  void responReq(int sock_fd);
+  int conToServer(); // connect to required server
+  void responReq(int client_fd, int server_fd); //receive response from server
+  void ssresponReq(int client_fd, int server_fd);
   template <bool flag>
-  void recvHTTP(int sock_fd, int noncontentsize = 0, int content_length = 0);
+  void recvHTTP(int sock_fd, int noncontentsize = 0, int content_length = 0, bool isconnect = false);
   //    createThread(); // create a thread
   //    readCache(); // read from cache
   //    writeCache(); // write to cache
@@ -71,6 +72,7 @@ private:
   // string stickytogether();
   void recvGET(int sock_fd);
   void recvPOST(int sock_fd);
+  void recvCONNECT(int sock_fd);
   void parsereqline(string &reqline);
   void parsereqhead(string &reqhead);
   void parsereqheadhelp(string &perline);
