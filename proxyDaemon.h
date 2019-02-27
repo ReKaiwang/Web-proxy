@@ -62,8 +62,8 @@ public:
   void ssresponReq(int client_fd, int server_fd);
   template <bool flag>
   void recvHTTP(int sock_fd, string& recvbuff,int noncontentsize = 0, int content_length = 0);
-  void recvSSLHTTP(int sock_fd);
-  //    createThread(); // create a thread
+  void recvSSLHTTP(int sock_fd, string& recvbuff);
+
   //    readCache(); // read from cache
   //    writeCache(); // write to cache
   //    writeLog(); // write to log file
@@ -77,8 +77,11 @@ private:
   void parsereqline(string &reqline);
   void parsereqhead(string &reqhead);
   void parsereqheadhelp(string &perline);
-  //long octToDec(long num);
+ // int HexToDec(int num);
+  int recvChunkedsize(int sock_fd,string& chunkedstr);
+  void recvChunkedbody(int sock_fd, string& recvbuff );
   void selectRecv(int recv_fd, int send_fd);
+  void recvChunked(int server_fd, int client_fd);
 };
 
 class proxymanager {

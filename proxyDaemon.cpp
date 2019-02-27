@@ -15,6 +15,8 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <ctime>
+#include <vector>
 using namespace std;
 #define CONNECTBUFFSIZE 1
 #define BUFFSIZE 256
@@ -122,6 +124,7 @@ void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
       close(sock_fd);
       // exit(EXIT_FAILURE);
       terminate();
+      //pthread_exit((void*) 0);
     } else {
       recvbuff.append(tempbuff, status);
       if (flag) {
@@ -141,7 +144,7 @@ void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
   }
   cout << recvbuff << endl;
 }
-void proxyDaemon::recvSSLHTTP(int sock_fd){
+void proxyDaemon::recvSSLHTTP(int sock_fd, string& recvbuff){
   int status;
   while (1) {
     char tempbuff;
@@ -151,13 +154,14 @@ void proxyDaemon::recvSSLHTTP(int sock_fd){
       // exit(EXIT_FAILURE);
       //terminate();
       close(sock_fd);
-      pthread_exit((void*) 0);
+      terminate();
+      //pthread_exit((void*) 0);
     } else {
-      client_buff.push_back(tempbuff);
+        recvbuff.push_back(tempbuff);
       if (status == 0) {
         break;
       }
-      if (client_buff.find("\r\n\r\n") != string::npos) {
+      if (recvbuff.find("\r\n\r\n") != string::npos) {
         break;
       }
     }
@@ -171,6 +175,7 @@ void proxyDaemon::recvSSLHTTP(int sock_fd){
 void proxyDaemon::recvPOST(int sock_fd) {
   client_buff.append("POS");
   recvHTTP<false>(sock_fd, client_buff,0, 0);
+  //recvSSLHTTP(sock_fd,server_buff);
   size_t findlength;
   int content_length = 0;
   if ((findlength = client_buff.find("Content-Length")) != string::npos) {
@@ -184,7 +189,8 @@ void proxyDaemon::recvPOST(int sock_fd) {
   } else {
     cerr << "wrong POST form" << endl;
     close(sock_fd);
-    pthread_exit((void*) 0);
+    terminate();
+    //pthread_exit((void*) 0);
   }
   cout << client_buff << endl;
   cout << "POST SUCESS" << endl;
@@ -192,7 +198,7 @@ void proxyDaemon::recvPOST(int sock_fd) {
 
 void proxyDaemon::recvCONNECT(int sock_fd){
   client_buff.append("CON");
-  recvSSLHTTP(sock_fd);
+  recvSSLHTTP(sock_fd, client_buff);
 }
 int proxyDaemon::parseReq() {
   // parse the request line
@@ -249,8 +255,8 @@ void proxyDaemon::parsereqhead(string &reqhead) {
   if (hostpoint == string::npos) {
     cerr << "can't find the host" << endl;
     // exit(EXIT_FAILURE);
-    //terminate();
-    pthread_exit((void*) 0);
+    terminate();
+    //pthread_exit((void*) 0);
   }
   string tempsubstr = reqhead.substr(hostpoint);
   myreqheader["Host"] =
@@ -274,7 +280,7 @@ int proxyDaemon::conToServer() {
     port = myreqheader["Host"].substr(findport + 1);
     myreqheader["Host"].erase(findport);
   }
-  
+
   status = getaddrinfo(myreqheader["Host"].c_str(), port.c_str(), &host_info,
                        &host_info_list);
   //create a smart pointer
@@ -326,7 +332,8 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
     //terminate();
     close(client_fd);
     close(server_fd);
-    pthread_exit((void*) 0);
+    terminate();
+    //pthread_exit((void*) 0);
   }
 //  status = send(server_fd,client_buff.c_str(),(size_t)client_buff.size(),0);
 //  if(status == -1){
@@ -350,7 +357,8 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
        //terminate();
       close(client_fd);
       close(server_fd);
-      pthread_exit((void*) 0);
+      terminate();
+      //pthread_exit((void*) 0);
       }
 
       if(FD_ISSET(client_fd, & read_fds)){
@@ -364,21 +372,22 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
 
 
 void proxyDaemon::selectRecv(int recv_fd, int send_fd) {
-  char tempbuff[256];
+  char tempbuff[5000];
   int status;
   status = recv(recv_fd, tempbuff, sizeof(tempbuff), 0);
   if (status < 0) {
     if (status == 0) {
       close(recv_fd);
       close(send_fd);
+      return;
       //terminate();
-      pthread_exit((void*) 0);
-    } else {
-      cerr << "some wrong happen during SSL" << endl;
-      close(recv_fd);
-      close(send_fd);
-      //terminate();
-      pthread_exit((void*) 0);
+      //pthread_exit((void*) 0);
+//    } else {
+//      cerr << "some wrong happen during SSL" << endl;
+//      close(recv_fd);
+//      close(send_fd);
+//      terminate();
+      //pthread_exit((void*) 0);
     }
   }
   status = send(send_fd, tempbuff, status, 0);
@@ -392,8 +401,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     cerr << "fail to send message to server" << endl;
     close(client_fd);
     close(server_fd);
-    //terminate();
-    pthread_exit((void*) 0);
+    terminate();
+    //pthread_exit((void*) 0);
   }
   cout << "sendsuceess" << endl;
   //    char tempbuff[25600];
@@ -426,7 +435,8 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
 //    }
 //  }
   // cout << server_buff.find("\r\n\r\n")<<endl;
-  recvHTTP<false>(server_fd, server_buff,0, 0);
+  //recvHTTP<false>(server_fd, server_buff,0, 0);
+  recvSSLHTTP(server_fd, server_buff);
   size_t findlength;
   int content_length = 0;
   if ((findlength = server_buff.find("Content-Length")) != string::npos) {
@@ -437,7 +447,29 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     int noncontentsize =
             server_buff.substr(0, server_buff.find("\r\n\r\n") + 4).size();
     recvHTTP<true>(server_fd,server_buff, noncontentsize, content_length);
-  } else {
+    status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
+    if (status == -1) {
+      cerr << "fail to sendback to client" << endl;
+      //terminate();
+      close(client_fd);
+      close(server_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+    }
+  } else if((findlength = server_buff.find("Transfer-Encoding: chunked")) != string::npos){
+    status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
+    if (status == -1) {
+      cerr << "fail to sendback to client" << endl;
+      //terminate();
+      close(client_fd);
+      close(server_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+    }
+    recvChunked(server_fd,client_fd);
+    return;
+  }
+  else{
     cerr << "wrong form from server" << endl;
   }
 //  if ((findheader = server_buff.find("Content-Length")) != string::npos) {
@@ -465,17 +497,69 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
 //      memset(tempbuff, 0, sizeof(tempbuff));
 //    }
 //  }
-  cout << server_buff;
   // deal with chunked data
   // else if((findheader = server_buff.find("Content-Length")) != string::npos)
-  status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
-  if (status == -1) {
-    cerr << "fail to sendback to client" << endl;
-    //terminate();
-    close(client_fd);
-    close(server_fd);
-    pthread_exit((void*) 0);
+
+
+}
+
+
+int proxyDaemon::recvChunkedsize(int sock_fd, string& chunkedstr) {
+  string tempcount;
+  int status;
+  int result;
+  while(1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if(status < 0){
+      cerr << "error in recving chunked size"<<endl;
+      return -1;
+    }
+    tempcount.push_back(tempbuff);
+    if(tempcount.find("\r\n")!=string::npos){
+      result = atoi(tempcount.c_str());
+      cout << tempcount;
+      chunkedstr.append(tempcount);
+      //result = HexToDec(result);
+      break;
+    }
   }
+  return result;
+}
+void proxyDaemon::recvChunkedbody(int sock_fd, string& chunkedstr ) {
+  string tempstr;
+  //int count = 0;
+  int status;
+  while (1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if (status < 0) {
+      cerr << "error in recving chunked" << endl;
+      return;
+    }
+    //out += status;
+    tempstr.push_back(tempbuff);
+    if (tempstr.find("\r\n") != string::npos) {
+      chunkedstr.append(tempstr);
+      break;
+    }
+
+  }
+}
+void proxyDaemon::recvChunked(int server_fd, int client_fd){
+    int status;
+   // char tempbuff;
+    while(1) {
+      string chunkedstr;
+      int chunkedlen = recvChunkedsize(server_fd,chunkedstr);
+      if(chunkedlen == 0) {
+        chunkedstr.append("\r\n");
+      }
+      else{
+        recvChunkedbody(server_fd,chunkedstr);
+      }
+      status = send(client_fd, chunkedstr.c_str(), (size_t)chunkedstr.size(), 0);
+    }
 
 }
 
