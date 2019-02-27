@@ -54,7 +54,7 @@ private:
 
 public:
   static int createListenFd(char *port_n);
-  static void handleReq(int sock_fd);
+  static void handleReq(int* sock_fd);
   static void *acceptReq(void *sock_fd); // accept HTTP request from cline
   int parseReq();     // parse HTTP request into method, URL and context
   int conToServer(); // connect to required server

@@ -23,9 +23,9 @@ using namespace std;
 // a heap lock
 pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
 // implementation of proxyDaemon class
-void proxyDaemon::handleReq(int sock_fd) {
+void proxyDaemon::handleReq(int* sock_fd) {
   pthread_t thread;
-  pthread_create(&thread, NULL, proxyDaemon::acceptReq, (void *)&sock_fd);
+  pthread_create(&thread, NULL, proxyDaemon::acceptReq, (void *)sock_fd);
 }
 
 /* create a proxy object to receive http req, then parse
@@ -40,12 +40,12 @@ void *proxyDaemon::acceptReq(void *client_fd) {
   if (status == -1) {
     cerr << "fail to get http request from client" << endl;
     close(*(int *)client_fd);
+    delete (int*) client_fd;
     return NULL;
   }
   method[3] = '\0';
   // if GET
   if (strcmp(method, "GET") == 0) {
-    cout << "get request" << endl;
     pd.recvGET(*(int *)client_fd);
   }
   // if POST
@@ -54,22 +54,25 @@ void *proxyDaemon::acceptReq(void *client_fd) {
   }
   // if CONNECT
   else if(strcmp(method,"CON") == 0){
-      cout << "CONNECT!" <<endl;
       pd.recvCONNECT(*(int *)client_fd);
   }
   else{
-      cout << "Not support " << method <<endl;
+      //cout << "Not support " << method <<endl;
+      close(*(int *)client_fd);
+      delete (int*) client_fd;
       return NULL;
   }
   // parse the http message
   if (pd.parseReq() == -1) {
     close(*(int *)client_fd);
+    delete (int*) client_fd;
     return NULL;
   }
 
   int server_fd = pd.conToServer();
   if(server_fd == -1){
     close(*(int *)client_fd);
+    delete (int*) client_fd;
     return NULL;
   }
   if(pd.myreqline.method == "CONNECT") {
@@ -80,6 +83,7 @@ void *proxyDaemon::acceptReq(void *client_fd) {
   }
   close(server_fd);
   close(*(int *)client_fd);
+  delete (int*) client_fd;
   return NULL;
 }
 
@@ -139,10 +143,10 @@ void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
       if (!flag && recvbuff.find("\r\n\r\n") != string::npos) {
         break;
       }
-      memset(tempbuff, 0, sizeof(tempbuff));
+      //memset(tempbuff, 0, sizeof(tempbuff));
     }
   }
-  cout << recvbuff << endl;
+  //cout << recvbuff << endl;
 }
 void proxyDaemon::recvSSLHTTP(int sock_fd, string& recvbuff){
   int status;
@@ -166,7 +170,7 @@ void proxyDaemon::recvSSLHTTP(int sock_fd, string& recvbuff){
       }
     }
   }
-  cout << client_buff<<endl;
+  //cout << client_buff<<endl;
 }
 
 /* handle request with method 'POST'
@@ -192,8 +196,8 @@ void proxyDaemon::recvPOST(int sock_fd) {
     terminate();
     //pthread_exit((void*) 0);
   }
-  cout << client_buff << endl;
-  cout << "POST SUCESS" << endl;
+  //cout << client_buff << endl;
+  //cout << "POST SUCESS" << endl;
 }
 
 void proxyDaemon::recvCONNECT(int sock_fd){
@@ -238,7 +242,7 @@ int proxyDaemon::parseReq() {
   parsereqhead(header);
   return 1;
 }
-void proxyDaemon::parsereqline(string &reqline) {
+void proxyDaemon::parsereqline(string & reqline) {
   int spacepos = reqline.find(' ');
   int prepos;
   myreqline.method = reqline.substr(0, spacepos);
@@ -284,7 +288,7 @@ int proxyDaemon::conToServer() {
   status = getaddrinfo(myreqheader["Host"].c_str(), port.c_str(), &host_info,
                        &host_info_list);
   //create a smart pointer
-  unique_ptr<struct addrinfo> sptr(host_info_list);
+  //unique_ptr<struct addrinfo> sptr(host_info_list);
   if (status != 0) {
     perror("Error: cannot get server address\n");
     // exit(EXIT_FAILURE);
@@ -311,6 +315,7 @@ int proxyDaemon::conToServer() {
     //pthread_exit((void*) 0);
     return -1;
   }
+  freeaddrinfo(host_info_list);
   return sock_fd;
   // deal with chunked data
   // else if((findheader = server_buff.find("Content-Length")) != string::npos)
@@ -340,7 +345,7 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
 //    cerr << "fails to send to server"<<endl;
 //    terminate();
 //  }
-  cout << okbuff<<endl;
+  //cout << okbuff<<endl;
   FD_SET(client_fd, &master); // add to master set
   if (client_fd > fdmax) {
     fdmax = client_fd;
@@ -362,28 +367,29 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
       }
 
       if(FD_ISSET(client_fd, & read_fds)){
-        if(selectRecv(client_fd,server_fd) == 0) {
-          return;
+        if(selectRecv(client_fd,server_fd) == -1) {
+          break;
         }
       }
       if(FD_ISSET(server_fd, & read_fds)){
-        if(selectRecv(server_fd,client_fd)){
-          return;
+        if(selectRecv(server_fd,client_fd) == -1){
+          break;
         }
+
       }
   }
 }
 
 
 int proxyDaemon::selectRecv(int recv_fd, int send_fd) {
-  char tempbuff[5000];
+  char tempbuff[500];
   int status;
   status = recv(recv_fd, tempbuff, sizeof(tempbuff), 0);
-  if (status < 0) {
-    if (status == 0) {
+  if (status <= 0) {
+    //if (status == 0) {
       close(recv_fd);
       close(send_fd);
-      return 0;
+      return -1;
       //terminate();
       //pthread_exit((void*) 0);
 //    } else {
@@ -392,7 +398,7 @@ int proxyDaemon::selectRecv(int recv_fd, int send_fd) {
 //      close(send_fd);
 //      terminate();
       //pthread_exit((void*) 0);
-    }
+    //}
   }
   status = send(send_fd, tempbuff, status, 0);
   return 1;
@@ -409,7 +415,7 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     terminate();
     //pthread_exit((void*) 0);
   }
-  cout << "sendsuceess" << endl;
+  //cout << "sendsuceess" << endl;
   //    char tempbuff[25600];
   //    status = recv(client_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
   //        if (status == -1) {
@@ -523,7 +529,7 @@ int proxyDaemon::recvChunkedsize(int sock_fd, string& chunkedstr) {
     tempcount.push_back(tempbuff);
     if(tempcount.find("\r\n")!=string::npos){
       result = atoi(tempcount.c_str());
-      cout << tempcount;
+      //cout << tempcount;
       chunkedstr.append(tempcount);
       //result = HexToDec(result);
       break;
@@ -596,7 +602,10 @@ int proxyDaemon::createListenFd(char *port_n) {
     freeaddrinfo(host_info_list);
     exit(EXIT_FAILURE);
   }
-
+  int enable = 1;
+  if (setsockopt(listen_sofd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+      cerr<<"setsockopt(SO_REUSEADDR) failed" << endl;
+  }
   // begin listening
   if ((status = bind(listen_sofd, host_info_list->ai_addr,host_info_list->ai_addrlen)) == -1) {
     cerr << "Error: cannot bind socket" << endl;
@@ -623,7 +632,8 @@ void proxymanager::runWithoutCache(char *port_n) {
   while (1) {
     int new_fd =
         accept(listen_sofd, (struct sockaddr *)(&client_addr), &addr_size);
-    proxyDaemon::handleReq(new_fd);
+    int * sock_fd = new int(new_fd);
+    proxyDaemon::handleReq(sock_fd);
 
     //        // 'GET' or 'POST'
     //        if (methodstr == "GET") {
