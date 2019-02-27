@@ -80,7 +80,7 @@ private:
  // int HexToDec(int num);
   int recvChunkedsize(int sock_fd,string& chunkedstr);
   void recvChunkedbody(int sock_fd, string& recvbuff );
-  void selectRecv(int recv_fd, int send_fd);
+  int selectRecv(int recv_fd, int send_fd);
   void recvChunked(int server_fd, int client_fd);
 };
 

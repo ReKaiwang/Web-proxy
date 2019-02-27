@@ -362,16 +362,20 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
       }
 
       if(FD_ISSET(client_fd, & read_fds)){
-        selectRecv(client_fd,server_fd);
+        if(selectRecv(client_fd,server_fd) == 0) {
+          return;
+        }
       }
       if(FD_ISSET(server_fd, & read_fds)){
-        selectRecv(server_fd,client_fd);
+        if(selectRecv(server_fd,client_fd)){
+          return;
+        }
       }
   }
 }
 
 
-void proxyDaemon::selectRecv(int recv_fd, int send_fd) {
+int proxyDaemon::selectRecv(int recv_fd, int send_fd) {
   char tempbuff[5000];
   int status;
   status = recv(recv_fd, tempbuff, sizeof(tempbuff), 0);
@@ -379,7 +383,7 @@ void proxyDaemon::selectRecv(int recv_fd, int send_fd) {
     if (status == 0) {
       close(recv_fd);
       close(send_fd);
-      return;
+      return 0;
       //terminate();
       //pthread_exit((void*) 0);
 //    } else {
@@ -391,6 +395,7 @@ void proxyDaemon::selectRecv(int recv_fd, int send_fd) {
     }
   }
   status = send(send_fd, tempbuff, status, 0);
+  return 1;
 }
 void proxyDaemon::responReq(int client_fd, int server_fd) {
   int status;
