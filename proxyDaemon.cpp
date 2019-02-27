@@ -20,7 +20,6 @@
 using namespace std;
 #define CONNECTBUFFSIZE 1
 #define BUFFSIZE 300
-#define hello 00
 // a heap lock
 pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
 // implementation of proxyDaemon class
