@@ -1,0 +1,22 @@
+0: GET http://people.duke.edu/ from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:17 UTC
+0: not in cache
+0: Requesting GET http://people.duke.edu/ HTTP/1.1 from people.duke.edu
+0: Received HTTP/1.1 200 OK people.duke.edu
+0: cached, but requires re-validation
+1: GET http://people.duke.edu/favicon.ico from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:17 UTC
+1: not in cache
+1: Requesting GET http://people.duke.edu/favicon.ico HTTP/1.1 from people.duke.edu
+1: Received HTTP/1.1 404 Not Found people.duke.edu
+1: cached, but requires re-validation
+2: CONNECT www.google.com:443 from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:19 UTC
+2: Requesting CONNECT www.google.com:443 HTTP/1.1 from www.google.com:443
+2: Received HTTP/1.1 200 OK from www.google.com
+3: CONNECT adservice.google.com:443 from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:20 UTC
+3: Requesting CONNECT adservice.google.com:443 HTTP/1.1 from adservice.google.com:443
+3: Received HTTP/1.1 200 OK from adservice.google.com
+4: CONNECT www.gstatic.com:443 from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:20 UTC
+4: Requesting CONNECT www.gstatic.com:443 HTTP/1.1 from www.gstatic.com:443
+4: Received HTTP/1.1 200 OK from www.gstatic.com
+5: CONNECT apis.google.com:443 from 127.0.0.1 @ Thu, 28 Feb 2019 04:11:20 UTC
+5: Requesting CONNECT apis.google.com:443 HTTP/1.1 from apis.google.com:443
+5: Received HTTP/1.1 200 OK from apis.google.com

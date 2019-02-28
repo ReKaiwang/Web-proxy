@@ -2,9 +2,16 @@
 // compare date time
 #ifndef __DATETIME__
 #define __DATETIME__
+#include <string>
+#include <iostream>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+using std::string;
+using std::stringstream;
 class dateTime{
 public:
-    dateTime(string timestring) {
+    dateTime(std::string timestring) {
         strptime(timestring.c_str(),"%a, %d %b %Y %H:%M:%S %Z", &timeDate);
     }
 
@@ -12,7 +19,17 @@ public:
         return difftime(mktime(&timeDate), mktime(&(expiredTime.timeDate))) <= 0;
     }
 
+    time_t getTime() {
+        return mktime(&(timeDate));
+    }
+
+    string toString() {
+        stringstream ss;
+        ss << std::put_time(&timeDate, "%a, %d %b %Y %H:%M:%S %Z");
+        return ss.str();
+    }
+
 private:
-    tm timeDate;
+    struct tm timeDate;
 };
 #endif

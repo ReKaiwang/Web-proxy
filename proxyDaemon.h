@@ -11,8 +11,13 @@
 #include <map>
 #include <pthread.h>
 #include <string>
-using namespace std;
-
+#include "logger.h"
+using std::map;
+using std::string;
+using std::cout;
+using std::endl;
+using std::cerr;
+using std::terminate;
 // first line in request
 struct _reqline {
   string method;
@@ -21,6 +26,11 @@ struct _reqline {
 };
 typedef _reqline reqline;
 
+struct clientIP{
+    int sock_fd;
+    string IP4;
+    clientIP(int sk, string ip_4):sock_fd(sk),IP4(ip_4){}
+};
 /*struct _reqheader{
     string name;
     string value;
@@ -54,12 +64,12 @@ private:
 
 public:
   static int createListenFd(char *port_n);
-  static void handleReq(int* sock_fd);
+  static void handleReq(clientIP* sock_fd);
   static void *acceptReq(void *sock_fd); // accept HTTP request from cline
   int parseReq();     // parse HTTP request into method, URL and context
-  int conToServer(); // connect to required server
-  void responReq(int client_fd, int server_fd); //receive response from server
-  void ssresponReq(int client_fd, int server_fd);
+  int conToServer(logger& mylogger); // connect to required server
+  void responReq(int client_fd, int server_fd,logger& mylogger); //receive response from server
+  void ssresponReq(int client_fd, int server_fd, logger& mylogger);
   template <bool flag>
   void recvHTTP(int sock_fd, string& recvbuff,int noncontentsize = 0, int content_length = 0);
   void recvSSLHTTP(int sock_fd, string& recvbuff);

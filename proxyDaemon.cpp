@@ -1,31 +1,39 @@
 //
 // Created by Kai Wang on 2019-02-22.
 //
-
+#include "datetime.h"
+#include "logger.h"
+#include "LRUcache.h"
 #include "proxyDaemon.h"
-#include <iostream>
-#include <map>
 #include <netdb.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <string>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <iostream>
+#include <fstream>
+#include <map>
+#include <string>
 #include <ctime>
 #include <vector>
-using namespace std;
+
+
 #define CONNECTBUFFSIZE 1
 #define BUFFSIZE 1024
+#define UID 100;
+int myID = 0;
+LRUCache mycache(10);
 
 // a heap lock
 pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
+pthread_rwlock_t cachelock = PTHREAD_RWLOCK_INITIALIZER;
 
 // implementation of proxyDaemon class
-void proxyDaemon::handleReq(int* sock_fd) {
+void proxyDaemon::handleReq(clientIP* sock_fd) {
   pthread_t thread;
   //cache me!
   pthread_create(&thread, NULL, proxyDaemon::acceptReq, (void *)sock_fd);
@@ -37,57 +45,110 @@ void proxyDaemon::handleReq(int* sock_fd) {
  */
 void *proxyDaemon::acceptReq(void *client_fd) {
   proxyDaemon pd;
+  pthread_rwlock_wrlock(&heaplock);
+  clientIP* client_class = (clientIP*) client_fd;
+  int u_id = myID++;
+  pthread_rwlock_unlock(&heaplock);
+  //cout << u_id<<endl;
+  logger mylogger(u_id,"proxy.log");
   int status;
   char method[4];
-  status = recv(*(int *)client_fd, method, sizeof(method) - sizeof(char), 0);
+  status = recv(client_class->sock_fd, method, sizeof(method) - sizeof(char), 0);
   if (status == -1) {
     cerr << "fail to get http request from client" << endl;
-    close(*(int *)client_fd);
-    delete (int*) client_fd;
+    close(client_class->sock_fd);
+    delete client_class;
     return NULL;
   }
   method[3] = '\0';
   // if GET
+  time_t nowTime = time(0);
+  struct tm mytm= *gmtime(&nowTime);
+  stringstream ss;
+  ss << std::put_time(&mytm, "%a, %d %b %Y %H:%M:%S %Z");
+  string currtime = ss.str();
   if (strcmp(method, "GET") == 0) {
-    pd.recvGET(*(int *)client_fd);
+    pd.recvGET(client_class->sock_fd);
   }
   // if POST
   else if (strcmp(method, "POS") == 0) {
-    cout <<"POST" <<endl;
-    pd.recvPOST(*(int *)client_fd);
+    pd.recvPOST(client_class->sock_fd);
   }
   // if CONNECT
   else if(strcmp(method,"CON") == 0){
-      pd.recvCONNECT(*(int *)client_fd);
+      pd.recvCONNECT(client_class->sock_fd);
   }
   else{
       //cout << "Not support " << method <<endl;
-      close(*(int *)client_fd);
-      delete (int*) client_fd;
+      close(client_class->sock_fd);
+      delete client_class;
       return NULL;
   }
   // parse the http message
+
+
   if (pd.parseReq() == -1) {
-    close(*(int *)client_fd);
-    delete (int*) client_fd;
+    close(client_class->sock_fd);
+    delete client_class;
     return NULL;
+  }
+  pthread_rwlock_wrlock(&cachelock);
+  mylogger.writeLog(pd.myreqline.method+" "+pd.myreqline.URI+ " from " + client_class->IP4+ " @ " + currtime);
+  pthread_rwlock_unlock(&cachelock);
+  if(pd.myreqline.method == "GET"){
+    pthread_rwlock_wrlock(&cachelock);
+    if(mycache.search(pd.myreqline.URI, pd.server_buff, mylogger)){
+      pthread_rwlock_unlock(&cachelock);
+      status = send(*(int *)client_fd,pd.server_buff.c_str(), pd.server_buff.size(),0);
+      if(status == -1){
+        cerr << "fail to send msg back to client"<<endl;
+      }
+
+      close(*(int *)client_fd);
+      delete (int*) client_fd;
+      return NULL;
+    }
+    else{
+      //cout << pd.myreqline.URI<<endl;
+      int server_fd = pd.conToServer(mylogger);
+      if(server_fd == -1){
+        close(*(int *)client_fd);
+        delete (int*) client_fd;
+        pthread_rwlock_unlock(&cachelock);
+        return NULL;
+      }
+      pd.responReq(*(int *) client_fd, server_fd, mylogger);
+      cout << pd.server_buff;
+      if(pd.server_buff.find("Cache-Control: no-cache") == string::npos){
+        mycache.update(pd.myreqline.URI, pd.server_buff, dateTime("Wed, 27 Feb 2020 04:55:38 GMT"), mylogger);
+        pthread_rwlock_unlock(&cachelock);
+        close(server_fd);
+        close(*(int *)client_fd);
+        delete (int*) client_fd;
+        return NULL;
+      }
+      pthread_rwlock_unlock(&cachelock);
+    }
+
+  }else {
+    int server_fd = pd.conToServer(mylogger);
+    if (server_fd == -1) {
+      close(*(int *) client_fd);
+      delete (int *) client_fd;
+      return NULL;
+    }
+    if (pd.myreqline.method == "CONNECT") {
+      // response CONNECT
+      //pthread_rwlock_wrlock(&cachelock);
+      pd.ssresponReq(*(int *) client_fd, server_fd,mylogger);
+      //pthread_rwlock_unlock(&cachelock);
+    } else {
+      //response GET and POST
+      pd.responReq(*(int *) client_fd, server_fd,mylogger);
+    }
+    close(server_fd);
   }
 
-  int server_fd = pd.conToServer();
-  if(server_fd == -1){
-    close(*(int *)client_fd);
-    delete (int*) client_fd;
-    return NULL;
-  }
-  if(pd.myreqline.method == "CONNECT") {
-    // response CONNECT
-    pd.ssresponReq(*(int *) client_fd, server_fd);
-  }
-  else {
-    //response GET and POST
-    pd.responReq(*(int *) client_fd, server_fd);
-  }
-  close(server_fd);
   close(*(int *)client_fd);
   delete (int*) client_fd;
   return NULL;
@@ -194,19 +255,6 @@ void proxyDaemon::recvCONNECT(int sock_fd){
   recvSSLHTTP(sock_fd, client_buff);
 }
 int proxyDaemon::parseReq() {
-  // parse the request line
-  //    int spacepos = temphttp.find(' ');
-  //    int prepos;
-  //    myreqline.method = temphttp.substr(0,spacepos);
-  //    temphttp.erase(spacepos, 1);
-  //    prepos = spacepos;
-  //    spacepos = temphttp.find(' ');
-  //    myreqline.URI = temphttp.substr(prepos,spacepos-prepos);
-  //    temphttp.erase(spacepos, 1);
-  //    prepos = spacepos;
-  //    spacepos = temphttp.find("\r\n");
-  //    myreqline.version= temphttp.substr(prepos,spacepos-prepos);
-  //    temphttp.erase(spacepos, 1);
   string temp = client_buff;
   // cout<< client_buff;
   size_t sepepoint = temp.find("\r\n");
@@ -217,16 +265,6 @@ int proxyDaemon::parseReq() {
   string firstline = temp.substr(0, sepepoint);
   parsereqline(firstline);
   temp.erase(sepepoint, 2);
-  // parse the request header
-  //    remember that the request header may have multiple lines!!--which I
-  //    havn't implemented prepos = spacepos; spacepos = temphttp.find(' ');
-  //    myreqheader.name= temphttp.substr(prepos,spacepos-prepos);
-  //    temphttp.erase(spacepos, 1);
-  //    prepos = spacepos;
-  //    spacepos = temphttp.find("\r\n");
-  //    myreqheader.value= temphttp.substr(prepos,spacepos-prepos);
-  //    temphttp.erase(spacepos, 1);
-  //string header = temp.substr(sepepoint, temp.find("\r\n\r\n") - sepepoint);
   string header = temp.substr(sepepoint);
   parsereqhead(header);
   return 1;
@@ -243,7 +281,6 @@ void proxyDaemon::parsereqline(string & reqline) {
   myreqline.version = reqline.substr(spacepos);
 }
 void proxyDaemon::parsereqhead(string &reqhead) {
-  // cout << reqhead;
   int hostpoint = reqhead.find("Host");
   if (hostpoint == string::npos) {
     cerr << "can't find the host" << endl;
@@ -255,7 +292,7 @@ void proxyDaemon::parsereqhead(string &reqhead) {
   myreqheader["Host"] =
       tempsubstr.substr(6, tempsubstr.find("\r\n") - 6);
 }
-int proxyDaemon::conToServer() {
+int proxyDaemon::conToServer(logger& mylogger) {
   // make a socket connecting with server
   int sock_fd;
   int status;
@@ -264,7 +301,9 @@ int proxyDaemon::conToServer() {
 
   host_info.ai_family = AF_INET;
   host_info.ai_socktype = SOCK_STREAM;
-
+  //pthread_rwlock_wrlock(&cachelock);
+  mylogger.writeLog("Requesting "+myreqline.method+" "+myreqline.URI+" "+ myreqline.version+" from " + myreqheader["Host"]);
+  //pthread_rwlock_unlock(&cachelock);
   // get the host address information
   string port = "80";
   size_t findport;
@@ -305,12 +344,8 @@ int proxyDaemon::conToServer() {
   }
   freeaddrinfo(host_info_list);
   return sock_fd;
-  // deal with chunked data
-  // else if((findheader = server_buff.find("Content-Length")) != string::npos)
-  // cout <<server_buff;
-  // server_buff.append(buff);
 }
-void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
+void proxyDaemon::ssresponReq(int client_fd, int server_fd, logger& mylogger) {
   int status;
   fd_set master; //master  fd
   fd_set read_fds; // temperate read list
@@ -319,6 +354,7 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
   FD_ZERO(&read_fds);
   //send 200 OK to client
   char* okbuff = (char *)"HTTP/1.1 200 OK\r\n\r\n";
+  mylogger.writeLog("Received HTTP/1.1 200 OK from " + myreqheader["Host"] );
   status = send(client_fd,okbuff, 40, 0);
   if(status == -1){
     cerr << "fails to send to client"<<endl;
@@ -328,12 +364,7 @@ void proxyDaemon::ssresponReq(int client_fd, int server_fd) {
     terminate();
     //pthread_exit((void*) 0);
   }
-//  status = send(server_fd,client_buff.c_str(),(size_t)client_buff.size(),0);
-//  if(status == -1){
-//    cerr << "fails to send to server"<<endl;
-//    terminate();
-//  }
-  //cout << okbuff<<endl;
+
   FD_SET(client_fd, &master); // add to master set
   if (client_fd > fdmax) {
     fdmax = client_fd;
@@ -378,20 +409,12 @@ int proxyDaemon::selectRecv(int recv_fd, int send_fd) {
       close(recv_fd);
       close(send_fd);
       return -1;
-      //terminate();
-      //pthread_exit((void*) 0);
-//    } else {
-//      cerr << "some wrong happen during SSL" << endl;
-//      close(recv_fd);
-//      close(send_fd);
-//      terminate();
-      //pthread_exit((void*) 0);
-    //}
+
   }
   status = send(send_fd, tempbuff, status, 0);
   return 1;
 }
-void proxyDaemon::responReq(int client_fd, int server_fd) {
+void proxyDaemon::responReq(int client_fd, int server_fd, logger& mylogger) {
   int status;
 
   // string httpToserver = stickytogether();
@@ -403,39 +426,31 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
     terminate();
     //pthread_exit((void*) 0);
   }
-  //cout << "sendsuceess" << endl;
-  //    char tempbuff[25600];
-  //    status = recv(client_fd, tempbuff, sizeof(tempbuff), MSG_WAITALL);
-  //        if (status == -1) {
-  //            cerr << "fail to receive message from server" << endl;
-  //            exit(EXIT_FAILURE);
-  //        }
-  // receive content from server
-//  long block_size = 0;
-//  // first get the status line and response header
-//  while (1) {
-//    char tempbuff[BUFFSIZE];
-//    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
-//    if (status == -1) {
-//      cerr << "fail to receive message from server" << endl;
-//      close(client_fd);
-//      close(server_fd);
-//      terminate();
-//    } else {
-//      if (status == 0)
-//        break;
-//      server_buff.append(tempbuff, status);
-//      block_size += status;
-//      cout << tempbuff;
-//      // what is wrong here?
-//      if (server_buff.find("\r\n\r\n") != string::npos)
-//        break;
-//      memset(tempbuff, 0, sizeof(tempbuff));
-//    }
-//  }
-  // cout << server_buff.find("\r\n\r\n")<<endl;
-  //recvHTTP<false>(server_fd, server_buff,0, 0);
   recvSSLHTTP(server_fd, server_buff);
+  mylogger.writeLog("Received " + server_buff.substr(0, server_buff.find("\r\n")) +" "+myreqheader["Host"] );
+  if(myreqline.method == "GET"){
+    if(server_buff.find( "Cache-Control: private") != string::npos){
+      mylogger.writeLog("not cacheable because Cache-Control: private" );
+    }
+    else if(server_buff.find( "Cache-Control: no-store") != string::npos){
+      mylogger.writeLog("not cacheable because Cache-Control: no-store" );
+    }
+    else{
+      if(server_buff.find( "Cache-Control: must-revalidation") != string::npos ||server_buff.find( "Cache-Control: proxy-revalidation") != string::npos ){
+        mylogger.writeLog("cached, but requires re-validation" );
+      }else {
+        int length = server_buff.find("Expires:");
+        if (length != string::npos) {
+          string temp = server_buff.substr(length);
+          string exptime = temp.substr(9, temp.find("\r\n\r\n"));
+          mylogger.writeLog("cached, expires at " + exptime);
+        }
+        else{
+          mylogger.writeLog("cached, but requires re-validation" );
+        }
+      }
+    }
+  }
   size_t findlength;
   int content_length = 0;
   if ((findlength = server_buff.find("Content-Length")) != string::npos) {
@@ -472,34 +487,6 @@ void proxyDaemon::responReq(int client_fd, int server_fd) {
   else{
     cerr << "wrong form from server" << endl;
   }
-//  if ((findheader = server_buff.find("Content-Length")) != string::npos) {
-//    // findheader = atoi(server_buff.substr(findheader+16, ))
-//    string tempstr = server_buff.substr(findheader + 16);
-//    header_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
-//  }
-//  // cout << header_length<<endl;
-//  //  cout << block_size;
-//  while (1) {
-//    char tempbuff[BUFFSIZE];
-//    status = recv(server_fd, tempbuff, sizeof(tempbuff), 0);
-//    if (status == -1) {
-//      cerr << "fail to receive message from server" << endl;
-//      close(client_fd);
-//      close(server_fd);
-//      terminate();
-//    } else {
-//      if (status == 0)
-//        break;
-//      server_buff.append(tempbuff, status);
-//      block_size += status;
-//      if (block_size >= header_length)
-//        break;
-//      memset(tempbuff, 0, sizeof(tempbuff));
-//    }
-//  }
-  // deal with chunked data
-  // else if((findheader = server_buff.find("Content-Length")) != string::npos)
-
 
 }
 
@@ -617,15 +604,19 @@ void proxymanager::runWithoutCache(char *port_n) {
   struct sockaddr_in client_addr;
   int listen_sofd = proxyDaemon::createListenFd(port_n);
   socklen_t addr_size = sizeof(client_addr);
-
+  std::ofstream logfile("proxy.log");
+  logfile.close();
   while (1) {
     int new_fd = accept(listen_sofd, (struct sockaddr *)(&client_addr), &addr_size);
+    char ip4_n[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(client_addr.sin_addr), ip4_n, INET_ADDRSTRLEN);
     if(new_fd == -1){
       cerr << "fail to accept socket with client"<<endl;
       continue;
     }
     // allocate sock_fd
-    int * sock_fd = new int(new_fd);
+
+    clientIP * sock_fd = new clientIP(new_fd,string(ip4_n));
     proxyDaemon::handleReq(sock_fd);
 
   }

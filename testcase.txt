@@ -1,0 +1,10 @@
+GET: 
+     1. Content-Length: http://people.duke.edu/~bmr23/ece568/class.html
+     2. Content-Length: http://www.httpwatch.com/httpgallery/caching/
+     3. chunked: http://www.httpwatch.com/httpgallery/chunked/chunkedimage.aspx
+     4. Content-Length: http://httpbin.org/forms/post
+POST: http://httpbin.org/forms/post
+
+CONNECT: google.com / youtube.com
+
+Cache: 

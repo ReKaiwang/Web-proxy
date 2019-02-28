@@ -2,13 +2,14 @@
 #define __LOGGER__
 #include <ios>
 #include <fstream>
-#include <mutex>
+
+using std::mutex;
+
 class logger{
 public:
-    logger(int i, string p) : id(i), path(p) {}
+    logger(int i, std::string p) : id(i), path(p) {}
 
-    void writeEvictedCacheLog(string& url) {
-        std::lock_guard<std::mutex> guard(loggermutex);
+    void writeEvictedCacheLog(std::string url) {
         std::ofstream log(path.c_str(), std::ios_base::app | std::ios_base::out);
         log << "(no-id): NOTE evicted " << url << " from cache\n";
     }
@@ -28,7 +29,7 @@ public:
         }
     }
 
-    void writeLog(string& str) {
+    void writeLog(std::string str) {
         std::ofstream log(path.c_str(), std::ios_base::app | std::ios_base::out);
         log << id << ": " << str << "\n";
     }
@@ -36,7 +37,6 @@ public:
 
 private:
     int id;
-    string path;
-    static mutex loggermutex;
+    std::string path;
 };
 #endif
