@@ -1,0 +1,634 @@
+//
+// Created by Kai Wang on 2019-02-22.
+//
+#include "datetime.h"
+#include "logger.h"
+#include "LRUcache.h"
+#include "proxyDaemon.h"
+#include <netdb.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <iostream>
+#include <fstream>
+#include <map>
+#include <string>
+#include <ctime>
+#include <vector>
+
+
+#define CONNECTBUFFSIZE 1
+#define BUFFSIZE 1024
+#define UID 100;
+int myID = 0;
+LRUCache mycache(50);
+
+// a heap lock
+pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
+pthread_rwlock_t cachelock = PTHREAD_RWLOCK_INITIALIZER;
+
+// implementation of proxyDaemon class
+void proxyDaemon::handleReq(clientIP* sock_fd) {
+  pthread_t thread;
+  //cache me!
+  pthread_create(&thread, NULL, proxyDaemon::acceptReq, (void *)sock_fd);
+}
+
+/* create a proxy object to receive http req, then parse
+ * and send req to target server and then
+ * return response
+ */
+void *proxyDaemon::acceptReq(void *client_fd) {
+  proxyDaemon pd;
+  pthread_rwlock_wrlock(&heaplock);
+  clientIP* client_class = (clientIP*) client_fd;
+  int u_id = myID++;
+  pthread_rwlock_unlock(&heaplock);
+  //cout << u_id<<endl;
+  logger mylogger(u_id,"../log/proxy.log");
+  int status;
+  char method[4];
+  status = recv(client_class->sock_fd, method, sizeof(method) - sizeof(char), 0);
+  if (status == -1) {
+    cerr << "fail to get http request from client" << endl;
+    close(client_class->sock_fd);
+    delete client_class;
+    return NULL;
+  }
+  method[3] = '\0';
+  // if GET
+  time_t nowTime = time(0);
+  struct tm mytm= *gmtime(&nowTime);
+  stringstream ss;
+  ss << std::put_time(&mytm, "%a, %d %b %Y %H:%M:%S %Z");
+  string currtime = ss.str();
+  if (strcmp(method, "GET") == 0) {
+    pd.recvGET(client_class->sock_fd);
+  }
+  // if POST
+  else if (strcmp(method, "POS") == 0) {
+    pd.recvPOST(client_class->sock_fd);
+  }
+  // if CONNECT
+  else if(strcmp(method,"CON") == 0){
+      pd.recvCONNECT(client_class->sock_fd);
+  }
+  else{
+      //cout << "Not support " << method <<endl;
+      close(client_class->sock_fd);
+      delete client_class;
+      return NULL;
+  }
+  // parse the http message
+
+
+  if (pd.parseReq() == -1) {
+    close(client_class->sock_fd);
+    delete client_class;
+    return NULL;
+  }
+  pthread_rwlock_wrlock(&cachelock);
+  mylogger.writeLog(pd.myreqline.method+" "+pd.myreqline.URI+ " from " + client_class->IP4+ " @ " + currtime);
+  pthread_rwlock_unlock(&cachelock);
+  if(pd.myreqline.method == "GET"){
+    pthread_rwlock_wrlock(&cachelock);
+    if(mycache.search(pd.myreqline.URI, pd.server_buff, mylogger)){
+      pthread_rwlock_unlock(&cachelock);
+      status = send(*(int *)client_fd,pd.server_buff.c_str(), pd.server_buff.size(),0);
+      if(status == -1){
+        cerr << "fail to send msg back to client"<<endl;
+      }
+
+      close(*(int *)client_fd);
+      delete (int*) client_fd;
+      return NULL;
+    }
+    else{
+      //cout << pd.myreqline.URI<<endl;
+      int server_fd = pd.conToServer(mylogger);
+      if(server_fd == -1){
+        close(*(int *)client_fd);
+        delete (int*) client_fd;
+        pthread_rwlock_unlock(&cachelock);
+        return NULL;
+      }
+      pd.responReq(*(int *) client_fd, server_fd, mylogger);
+     // cout << pd.server_buff;
+      if(pd.server_buff.find("Cache-Control: no-cache") == string::npos){
+        mycache.update(pd.myreqline.URI, pd.server_buff, dateTime("Wed, 27 Feb 2020 04:55:38 GMT"), mylogger);
+        pthread_rwlock_unlock(&cachelock);
+        close(server_fd);
+        close(*(int *)client_fd);
+        delete (int*) client_fd;
+        return NULL;
+      }
+      pthread_rwlock_unlock(&cachelock);
+    }
+
+  }else {
+    int server_fd = pd.conToServer(mylogger);
+    if (server_fd == -1) {
+      close(*(int *) client_fd);
+      delete (int *) client_fd;
+      return NULL;
+    }
+    if (pd.myreqline.method == "CONNECT") {
+      // response CONNECT
+      //pthread_rwlock_wrlock(&cachelock);
+      pd.ssresponReq(*(int *) client_fd, server_fd,mylogger);
+      //pthread_rwlock_unlock(&cachelock);
+    } else {
+      //response GET and POST
+      pd.responReq(*(int *) client_fd, server_fd,mylogger);
+    }
+    close(server_fd);
+  }
+
+  close(*(int *)client_fd);
+  delete (int*) client_fd;
+  return NULL;
+}
+
+/* handle request with method 'GET'
+ * get the http request from client
+ */
+void proxyDaemon::recvGET(int sock_fd) {
+  client_buff.append("GET");
+  recvHTTP<false>(sock_fd, client_buff,0, 0);
+}
+
+/* receive all the contents from the client*/
+template <bool flag>
+void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
+                           int content_length) {
+  int status;
+  while (1) {
+      char tempbuff[BUFFSIZE];
+
+    status = recv(sock_fd, tempbuff, sizeof(tempbuff), 0);
+    if (status == -1) {
+      cerr << "fail to receive message" << endl;
+      close(sock_fd);
+      // exit(EXIT_FAILURE);
+      terminate();
+      //pthread_exit((void*) 0);
+    } else {
+      recvbuff.append(tempbuff,status);
+      if (flag) {
+        //cout << noncontentsize<<endl;
+        //cout <<content_length<<endl;
+        if (status == 0) {
+          break;
+        }
+        if (recvbuff.size() - noncontentsize >= content_length) {
+          break;
+        }
+      }
+
+      if (!flag && recvbuff.find("\r\n\r\n") != string::npos) {
+        break;
+      }
+      memset(tempbuff, 0, sizeof(tempbuff));
+    }
+  }
+  //cout << recvbuff << endl;
+}
+void proxyDaemon::recvSSLHTTP(int sock_fd, string& recvbuff){
+  int status;
+  while (1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if (status == -1) {
+      cerr << "fail to receive message from client" << endl;
+      // exit(EXIT_FAILURE);
+      //terminate();
+      close(sock_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+    } else {
+        recvbuff.push_back(tempbuff);
+      if (status == 0) {
+        break;
+      }
+      if (recvbuff.find("\r\n\r\n") != string::npos) {
+        break;
+      }
+    }
+  }
+  //cout << client_buff<<endl;
+}
+
+/* handle request with method 'POST'
+ * get the http request from client
+ */
+void proxyDaemon::recvPOST(int sock_fd) {
+  client_buff.append("POS");
+  recvHTTP<false>(sock_fd, client_buff,0, 0);
+  //recvSSLHTTP(sock_fd,server_buff);
+  size_t findlength;
+  int content_length = 0;
+  if ((findlength = client_buff.find("Content-Length")) != string::npos) {
+    string tempstr = client_buff.substr(findlength + 16);
+    content_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
+    int noncontentsize =
+        client_buff.substr(0, client_buff.find("\r\n\r\n") + 3).size();
+    if(client_buff.size() - noncontentsize < content_length) {
+      recvHTTP<true>(sock_fd, client_buff, noncontentsize, content_length);
+    }
+  } else {
+    cerr << "wrong POST form" << endl;
+    close(sock_fd);
+    terminate();
+    //pthread_exit((void*) 0);
+  }
+ // cout << client_buff << endl;
+  //cout << "POST SUCESS" << endl;
+}
+
+void proxyDaemon::recvCONNECT(int sock_fd){
+  client_buff.append("CON");
+  recvSSLHTTP(sock_fd, client_buff);
+}
+int proxyDaemon::parseReq() {
+  string temp = client_buff;
+  // cout<< client_buff;
+  size_t sepepoint = temp.find("\r\n");
+  if (sepepoint == string::npos) {
+    cerr << "can't find request line" << endl;
+    return -1;
+  }
+  string firstline = temp.substr(0, sepepoint);
+  parsereqline(firstline);
+  temp.erase(sepepoint, 2);
+  string header = temp.substr(sepepoint);
+  parsereqhead(header);
+  return 1;
+}
+void proxyDaemon::parsereqline(string & reqline) {
+  int spacepos = reqline.find(' ');
+  int prepos;
+  myreqline.method = reqline.substr(0, spacepos);
+  reqline.erase(spacepos, 1);
+  prepos = spacepos;
+  spacepos = reqline.find(' ');
+  myreqline.URI = reqline.substr(prepos, spacepos - prepos);
+  reqline.erase(spacepos, 1);
+  myreqline.version = reqline.substr(spacepos);
+}
+void proxyDaemon::parsereqhead(string &reqhead) {
+  int hostpoint = reqhead.find("Host");
+  if (hostpoint == string::npos) {
+    cerr << "can't find the host" << endl;
+    // exit(EXIT_FAILURE);
+    terminate();
+    //pthread_exit((void*) 0);
+  }
+  string tempsubstr = reqhead.substr(hostpoint);
+  myreqheader["Host"] =
+      tempsubstr.substr(6, tempsubstr.find("\r\n") - 6);
+}
+int proxyDaemon::conToServer(logger& mylogger) {
+  // make a socket connecting with server
+  int sock_fd;
+  int status;
+  struct addrinfo host_info, *host_info_list;
+  memset(&host_info, 0, sizeof(host_info));
+
+  host_info.ai_family = AF_INET;
+  host_info.ai_socktype = SOCK_STREAM;
+  //pthread_rwlock_wrlock(&cachelock);
+  mylogger.writeLog("Requesting "+myreqline.method+" "+myreqline.URI+" "+ myreqline.version+" from " + myreqheader["Host"]);
+  //pthread_rwlock_unlock(&cachelock);
+  // get the host address information
+  string port = "80";
+  size_t findport;
+  if ((findport = myreqheader["Host"].find(":")) != string::npos) {
+    port = myreqheader["Host"].substr(findport + 1);
+    myreqheader["Host"].erase(findport);
+  }
+
+  status = getaddrinfo(myreqheader["Host"].c_str(), port.c_str(), &host_info,
+                       &host_info_list);
+  //create a smart pointer
+  //unique_ptr<struct addrinfo> sptr(host_info_list);
+  if (status != 0) {
+    perror("Error: cannot get server address\n");
+    // exit(EXIT_FAILURE);
+    //terminate();
+    //pthread_exit((void*) 0);
+    return -1;
+  }
+  sock_fd = socket(host_info_list->ai_family, host_info_list->ai_socktype,
+                   host_info_list->ai_protocol);
+  if (sock_fd == -1) {
+    cerr << "Error: cannot create socket to connect with server" << endl;
+    //    exit(EXIT_FAILURE);
+    //terminate();
+    //pthread_exit((void*) 0);
+    return -1;
+  }
+  // connect with server
+  status =
+      connect(sock_fd, host_info_list->ai_addr, host_info_list->ai_addrlen);
+
+  if (status == -1) {
+    cerr << "fail to connect with server" << endl;
+    //terminate();
+    //pthread_exit((void*) 0);
+    return -1;
+  }
+  freeaddrinfo(host_info_list);
+  return sock_fd;
+}
+void proxyDaemon::ssresponReq(int client_fd, int server_fd, logger& mylogger) {
+  int status;
+  fd_set master; //master  fd
+  fd_set read_fds; // temperate read list
+  int fdmax=0; // maximum file descriptor number
+  FD_ZERO(&master);    // clear the master and temp sets
+  FD_ZERO(&read_fds);
+  //send 200 OK to client
+  char* okbuff = (char *)"HTTP/1.1 200 OK\r\n\r\n";
+  mylogger.writeLog("Received HTTP/1.1 200 OK from " + myreqheader["Host"] );
+  status = send(client_fd,okbuff, 40, 0);
+  if(status == -1){
+    cerr << "fails to send to client"<<endl;
+    //terminate();
+    close(client_fd);
+    close(server_fd);
+    terminate();
+    //pthread_exit((void*) 0);
+  }
+
+  FD_SET(client_fd, &master); // add to master set
+  if (client_fd > fdmax) {
+    fdmax = client_fd;
+  }
+  FD_SET(server_fd, &master); // add to master set
+  if (server_fd > fdmax) {
+    fdmax = server_fd;
+  }
+  while(1) {
+    read_fds = master;
+    if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+       perror("select");
+       //exit(4);
+       //terminate();
+      close(client_fd);
+      close(server_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+      }
+
+      if(FD_ISSET(client_fd, & read_fds)){
+        if(selectRecv(client_fd,server_fd) == -1) {
+          break;
+        }
+      }
+      if(FD_ISSET(server_fd, & read_fds)){
+        if(selectRecv(server_fd,client_fd) == -1){
+          break;
+        }
+
+      }
+  }
+}
+
+
+int proxyDaemon::selectRecv(int recv_fd, int send_fd) {
+  char tempbuff[500];
+  int status;
+  status = recv(recv_fd, tempbuff, sizeof(tempbuff), 0);
+  if (status <= 0) {
+    //if (status == 0) {
+      close(recv_fd);
+      close(send_fd);
+      return -1;
+
+  }
+  status = send(send_fd, tempbuff, status, 0);
+  return 1;
+}
+void proxyDaemon::responReq(int client_fd, int server_fd, logger& mylogger) {
+  int status;
+
+  // string httpToserver = stickytogether();
+  status = send(server_fd, client_buff.c_str(), (size_t)client_buff.size(), 0);
+  if (status == -1) {
+    cerr << "fail to send message to server" << endl;
+    close(client_fd);
+    close(server_fd);
+    terminate();
+    //pthread_exit((void*) 0);
+  }
+  recvSSLHTTP(server_fd, server_buff);
+  mylogger.writeLog("Received " + server_buff.substr(0, server_buff.find("\r\n")) +" "+myreqheader["Host"] );
+  if(myreqline.method == "GET"){
+    if(server_buff.find( "Cache-Control: private") != string::npos){
+      mylogger.writeLog("not cacheable because Cache-Control: private" );
+    }
+    else if(server_buff.find( "Cache-Control: no-store") != string::npos){
+      mylogger.writeLog("not cacheable because Cache-Control: no-store" );
+    }
+    else{
+      if(server_buff.find( "Cache-Control: must-revalidation") != string::npos ||server_buff.find( "Cache-Control: proxy-revalidation") != string::npos ){
+        mylogger.writeLog("cached, but requires re-validation" );
+      }else {
+        int length = server_buff.find("Expires:");
+        if (length != string::npos) {
+          string temp = server_buff.substr(length);
+          string exptime = temp.substr(9, temp.find("\r\n\r\n"));
+          mylogger.writeLog("cached, expires at " + exptime);
+        }
+        else{
+          mylogger.writeLog("cached, but requires re-validation" );
+        }
+      }
+    }
+  }
+  size_t findlength;
+  int content_length = 0;
+  if ((findlength = server_buff.find("Content-Length")) != string::npos) {
+    string tempstr = server_buff.substr(findlength + 16);
+    content_length = atoi(tempstr.substr(0, tempstr.find("\r\n")).c_str());
+    //content_length = octToDec(content_length);
+    int noncontentsize =
+            server_buff.substr(0, server_buff.find("\r\n\r\n") + 4).size();
+    if(server_buff.size() - noncontentsize < content_length) {
+      recvHTTP<true>(server_fd, server_buff, noncontentsize, content_length);
+    }
+    status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
+    if (status == -1) {
+      cerr << "fail to sendback to client" << endl;
+      //terminate();
+      close(client_fd);
+      close(server_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+    }
+  } else if((findlength = server_buff.find("Transfer-Encoding: chunked")) != string::npos){
+    status = send(client_fd, server_buff.c_str(), (size_t)server_buff.size(), 0);
+    if (status == -1) {
+      cerr << "fail to sendback to client" << endl;
+      //terminate();
+      close(client_fd);
+      close(server_fd);
+      terminate();
+      //pthread_exit((void*) 0);
+    }
+    recvChunked(server_fd,client_fd);
+    return;
+  }
+  else{
+    cerr << "wrong form from server" << endl;
+  }
+
+}
+
+
+int proxyDaemon::recvChunkedsize(int sock_fd, string& chunkedstr) {
+  string tempcount;
+  int status;
+  int result;
+  while(1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if(status < 0){
+      cerr << "error in recving chunked size"<<endl;
+      return -1;
+    }
+    tempcount.push_back(tempbuff);
+    if(tempcount.find("\r\n")!=string::npos){
+      result = atoi(tempcount.c_str());
+      //cout << tempcount;
+      chunkedstr.append(tempcount);
+      //result = HexToDec(result);
+      break;
+    }
+  }
+  return result;
+}
+void proxyDaemon::recvChunkedbody(int sock_fd, string& chunkedstr ) {
+  string tempstr;
+  //int count = 0;
+  int status;
+  while (1) {
+    char tempbuff;
+    status = recv(sock_fd, &tempbuff, sizeof(tempbuff), 0);
+    if (status < 0) {
+      cerr << "error in recving chunked" << endl;
+      return;
+    }
+    //out += status;
+    tempstr.push_back(tempbuff);
+    if (tempstr.find("\r\n") != string::npos) {
+      chunkedstr.append(tempstr);
+      break;
+    }
+
+  }
+}
+void proxyDaemon::recvChunked(int server_fd, int client_fd){
+    int status;
+   // char tempbuff;
+    while(1) {
+      string chunkedstr;
+      int chunkedlen = recvChunkedsize(server_fd,chunkedstr);
+      if(chunkedlen == 0) {
+        chunkedstr.append("\r\n");
+      }
+      else{
+        recvChunkedbody(server_fd,chunkedstr);
+      }
+      status = send(client_fd, chunkedstr.c_str(), (size_t)chunkedstr.size(), 0);
+    }
+
+}
+
+int proxyDaemon::createListenFd() {
+  int listen_sofd;
+  struct addrinfo host_info, *host_info_list;
+  int status;
+
+  // initialize the host_info with 0
+  memset(&host_info, 0, sizeof(host_info));
+
+  // set the socket type
+  host_info.ai_family = AF_INET;
+  host_info.ai_socktype = SOCK_STREAM;
+  host_info.ai_flags = AI_PASSIVE;
+
+  // get the proxy address information
+  if ((status = getaddrinfo(NULL, "12345", &host_info, &host_info_list)) != 0) {
+    cerr << "getaddrinfo for listen error:" << gai_strerror(status);
+    freeaddrinfo(host_info_list);
+    exit(EXIT_FAILURE);
+  }
+  // make a socket for listen client
+  listen_sofd = socket(host_info_list->ai_family, host_info_list->ai_socktype,
+                       host_info_list->ai_protocol);
+
+  if (listen_sofd == -1) {
+    cerr << "Error: cannot create socket" << endl;
+    freeaddrinfo(host_info_list);
+    exit(EXIT_FAILURE);
+  }
+  int enable = 1;
+  if (setsockopt(listen_sofd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+      cerr<<"setsockopt (SO_REUSEADDR) failed" << endl;
+  }
+  // begin listening
+  if ((status = bind(listen_sofd, host_info_list->ai_addr,host_info_list->ai_addrlen)) == -1) {
+    cerr << "Error: cannot bind socket" << endl;
+    freeaddrinfo(host_info_list);
+    exit(EXIT_FAILURE);
+  }
+  // status = listen(socket_fd, 100);
+  // later change print error to throw exception
+  if ((status = listen(listen_sofd, 100)) == -1) {
+    cerr << "Error: cannot listen on socket" << endl;
+    freeaddrinfo(host_info_list);
+    exit(EXIT_FAILURE);
+  }
+  freeaddrinfo(host_info_list);
+  return listen_sofd;
+}
+
+// implementation of proxymanager class
+void proxymanager::runWithCache() {
+  struct sockaddr_in client_addr;
+  int listen_sofd = proxyDaemon::createListenFd();
+  socklen_t addr_size = sizeof(client_addr);
+  std::ofstream logfile("../log/proxy.log");
+  logfile.close();
+  while (1) {
+    int new_fd = accept(listen_sofd, (struct sockaddr *)(&client_addr), &addr_size);
+    char ip4_n[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(client_addr.sin_addr), ip4_n, INET_ADDRSTRLEN);
+    if(new_fd == -1){
+      cerr << "fail to accept socket with client"<<endl;
+      continue;
+    }
+    // allocate sock_fd
+
+    clientIP * sock_fd = new clientIP(new_fd,string(ip4_n));
+    proxyDaemon::handleReq(sock_fd);
+
+  }
+}
+
+// main function here
+int main(int argc, char **argv) {
+  if (argc != 1) {
+    cerr << "Usage error: give me a port number" << endl;
+    return -1;
+  }
+
+  proxymanager::runWithCache();
+  return 1;
+}

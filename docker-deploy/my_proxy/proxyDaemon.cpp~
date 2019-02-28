@@ -26,7 +26,7 @@
 #define BUFFSIZE 1024
 #define UID 100;
 int myID = 0;
-LRUCache mycache(10);
+LRUCache mycache(50);
 
 // a heap lock
 pthread_rwlock_t heaplock = PTHREAD_RWLOCK_INITIALIZER;
@@ -50,7 +50,7 @@ void *proxyDaemon::acceptReq(void *client_fd) {
   int u_id = myID++;
   pthread_rwlock_unlock(&heaplock);
   //cout << u_id<<endl;
-  logger mylogger(u_id,"proxy.log");
+  logger mylogger(u_id,"../log/proxy.log");
   int status;
   char method[4];
   status = recv(client_class->sock_fd, method, sizeof(method) - sizeof(char), 0);
@@ -118,7 +118,7 @@ void *proxyDaemon::acceptReq(void *client_fd) {
         return NULL;
       }
       pd.responReq(*(int *) client_fd, server_fd, mylogger);
-      cout << pd.server_buff;
+     // cout << pd.server_buff;
       if(pd.server_buff.find("Cache-Control: no-cache") == string::npos){
         mycache.update(pd.myreqline.URI, pd.server_buff, dateTime("Wed, 27 Feb 2020 04:55:38 GMT"), mylogger);
         pthread_rwlock_unlock(&cachelock);
@@ -180,8 +180,8 @@ void proxyDaemon::recvHTTP(int sock_fd,string& recvbuff, int noncontentsize,
     } else {
       recvbuff.append(tempbuff,status);
       if (flag) {
-        cout << noncontentsize<<endl;
-        cout <<content_length<<endl;
+        //cout << noncontentsize<<endl;
+        //cout <<content_length<<endl;
         if (status == 0) {
           break;
         }
@@ -220,7 +220,7 @@ void proxyDaemon::recvSSLHTTP(int sock_fd, string& recvbuff){
       }
     }
   }
-  cout << client_buff<<endl;
+  //cout << client_buff<<endl;
 }
 
 /* handle request with method 'POST'
@@ -246,7 +246,7 @@ void proxyDaemon::recvPOST(int sock_fd) {
     terminate();
     //pthread_exit((void*) 0);
   }
-  cout << client_buff << endl;
+ // cout << client_buff << endl;
   //cout << "POST SUCESS" << endl;
 }
 
@@ -550,7 +550,7 @@ void proxyDaemon::recvChunked(int server_fd, int client_fd){
 
 }
 
-int proxyDaemon::createListenFd(char *port_n) {
+int proxyDaemon::createListenFd() {
   int listen_sofd;
   struct addrinfo host_info, *host_info_list;
   int status;
@@ -564,7 +564,7 @@ int proxyDaemon::createListenFd(char *port_n) {
   host_info.ai_flags = AI_PASSIVE;
 
   // get the proxy address information
-  if ((status = getaddrinfo(NULL, port_n, &host_info, &host_info_list)) != 0) {
+  if ((status = getaddrinfo(NULL, "12345", &host_info, &host_info_list)) != 0) {
     cerr << "getaddrinfo for listen error:" << gai_strerror(status);
     freeaddrinfo(host_info_list);
     exit(EXIT_FAILURE);
@@ -600,11 +600,11 @@ int proxyDaemon::createListenFd(char *port_n) {
 }
 
 // implementation of proxymanager class
-void proxymanager::runWithoutCache(char *port_n) {
+void proxymanager::runWithCache() {
   struct sockaddr_in client_addr;
-  int listen_sofd = proxyDaemon::createListenFd(port_n);
+  int listen_sofd = proxyDaemon::createListenFd();
   socklen_t addr_size = sizeof(client_addr);
-  std::ofstream logfile("proxy.log");
+  std::ofstream logfile("../log/proxy.log");
   logfile.close();
   while (1) {
     int new_fd = accept(listen_sofd, (struct sockaddr *)(&client_addr), &addr_size);
@@ -624,7 +624,7 @@ void proxymanager::runWithoutCache(char *port_n) {
 
 // main function here
 int main(int argc, char **argv) {
-  if (argc != 2) {
+  if (argc != 1) {
     cerr << "Usage error: give me a port number" << endl;
     return -1;
   }

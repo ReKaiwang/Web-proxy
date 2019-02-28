@@ -63,7 +63,7 @@ private:
   string server_buff;
 
 public:
-  static int createListenFd(char *port_n);
+  static int createListenFd();
   static void handleReq(clientIP* sock_fd);
   static void *acceptReq(void *sock_fd); // accept HTTP request from cline
   int parseReq();     // parse HTTP request into method, URL and context
@@ -97,7 +97,7 @@ private:
 class proxymanager {
 public:
   static void runWithCache();                // run program use cache
-  static void runWithoutCache(char *port_n); // run program without using cache
+  //static void runWithoutCache(char *port_n); // run program without using cache
 };
 
 #endif // ERSS_HWK2_KW283_ZH89_PROXYDAEMON_H

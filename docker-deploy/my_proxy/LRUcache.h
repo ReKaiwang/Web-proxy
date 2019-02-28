@@ -7,7 +7,7 @@
 
 using std::list;
 using std::unordered_map;
-using std::mutex;
+
 using std::string;
 using std::cout;
 using std::endl;
